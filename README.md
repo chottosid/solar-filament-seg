@@ -24,7 +24,7 @@ has properties that shape every design decision:
 | Quirk | Consequence |
 |---|---|
 | **Pooled**: TP IoUs, FP and FN are summed over the whole test set, then PQ = sum(TP IoU) / (TP + FP/2 + FN/2) | Images with many filaments dominate; no per-image averaging. |
-| **Scored against each annotator record**: an image with three records scores the same predictions three times | A spurious instance costs one FP *per record*; a filament only one annotator drew costs FNs against the others. Precision is worth more than it looks. |
+| **Scored against each annotator record**: an image with three records scores the same predictions three times | A spurious instance costs one FP *per record*. A filament only one of three annotators drew earns one TP but two FPs if predicted, and one FN if not: a candidate pays only when its annotator-averaged matched IoU exceeds PQ/2 (about 0.2). |
 | **TP = IoU > 0.5, all pairs**: no one-to-one matching; FP/FN come from the rows and columns of the hit matrix | Mask quality on 3-12 px ribbons decides TPs: a 1 px boundary shift can move IoU across 0.5. |
 | **Non-overlap requirement**: overlapping instances make the host reject the file | Masks are painted greedily into a single label map, and every CSV is validated (`filament/submission.py`). |
 
