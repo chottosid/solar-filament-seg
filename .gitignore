@@ -1,0 +1,17 @@
+# competition data (keep the committed fold split)
+data/*
+!data/cv_folds.json
+
+# model weights and training runs
+weights/
+runs/
+*.pt
+
+# predictions
+*.csv
+
+# python / notebooks
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/

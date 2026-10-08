@@ -1,0 +1,184 @@
+"""This package vs the original research code on real checkpoints: identical outputs.
+
+Needs the research repository (default ../SOLAR_FILAMENT, or $FS26_SOURCE)
+with its fold-0 detector/refiner checkpoints and the training data; skipped
+otherwise. Training inputs (refiner samples, loss, YOLO labels) are compared
+directly. Inference runs on CPU: the fold-0 detector stands in for all 7 voters (at the
+production image sizes) and the fold-0 refiner for all 5 refiners, on two
+fold-0 images with overlapping detections. On the second, painting clips two
+of six voted masks to 124 px and 1 px, which the post-paint area rule then
+drops, so painting order and every gate are exercised. ~10 minutes on CPU.
+"""
+
+import functools
+import os
+import sys
+import types
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
+
+import numpy as np  # noqa: E402
+
+SOURCE = Path(os.environ.get("FS26_SOURCE", REPO.parent / "SOLAR_FILAMENT"))
+DET = SOURCE / "kernel_out/f0_det/runs/detect/runs/det/weights/best.pt"
+REF = SOURCE / "kernel_out/f0_refiner/refiner_best.pt"
+IMAGES = SOURCE / "MAGFiLO_1.0_Kaggle_2026/train/train_images"
+STEMS = ("20151228024254Uh", "20160401170314Mh")  # fold-0 images with overlapping detections
+SIZES = (1280, 1280, 1280, 1280, 1280, 1536, 1280)
+MODES = ("nearest", "bilinear")
+
+
+def _missing() -> str | None:
+    coco = IMAGES.parent / "MAGFiLO_1.0_Annotations_kaggle2026_train.json"
+    for path in (SOURCE / "src/anchor_ensemble.py", DET, REF, coco, *(IMAGES / f"{s}.jpeg" for s in STEMS)):
+        if not path.exists():
+            return f"research repo or checkpoint not found: {path}"
+    try:
+        import segmentation_models_pytorch  # noqa: F401
+        import ultralytics  # noqa: F401
+    except ImportError as e:
+        return str(e)
+    return None
+
+
+def _skip_if_missing() -> None:
+    reason = _missing()
+    if reason:
+        import pytest
+
+        pytest.skip(reason)
+
+
+@functools.cache
+def _research() -> types.SimpleNamespace:
+    """The research repository's modules (imported from its src/, without writing bytecode there)."""
+    import importlib
+
+    sys.dont_write_bytecode = True  # leave the research tree untouched
+    sys.path.insert(0, str(SOURCE / "src"))
+    names = ("anchor_ensemble", "predict_refine", "refiner_data", "train_refiner", "yolo_data", "data")
+    return types.SimpleNamespace(**{name: importlib.import_module(name) for name in names})
+
+
+@functools.cache
+def _models():
+    """(old anchor module, old predict module, old refiner, new refiner, device), loaded once."""
+    import torch
+
+    from filament import inference
+
+    old = _research()
+    device = torch.device("cpu")
+    old_ref = old.predict_refine.load_refiner(REF, device)  # downloads ImageNet weights, then overwrites them
+    new_ref = inference.load_refiner(REF, device)
+    return old.anchor_ensemble, old.predict_refine, old_ref, new_ref, device
+
+
+def test_training_inputs_match():
+    """Refiner samples (two epochs of jitter/flips), the loss and the YOLO labels are unchanged."""
+    _skip_if_missing()
+    import tempfile
+
+    import torch
+
+    from filament import detector, refiner
+    from filament.data import fold_stems, load_records
+
+    old = _research()
+    coco = IMAGES.parent / "MAGFiLO_1.0_Annotations_kaggle2026_train.json"
+    old_ais, new_recs, val = old.data.load_annotations(coco), load_records(coco), fold_stems(0)
+
+    for augment, in_val in ((True, False), (False, True)):  # augmented train crops, plain val crops
+        old_ds = old.refiner_data.RefinerDataset([a for a in old_ais if (a.stem in val) == in_val], IMAGES,
+                                                 augment=augment)
+        new_ds = refiner.RefinerDataset([r for r in new_recs if (r.stem in val) == in_val], IMAGES, augment=augment)
+        assert len(old_ds) == len(new_ds) > 1000
+        for epoch in (0, 3):
+            old_ds.epoch = new_ds.epoch = epoch
+            for idx in (0, 1, 777, len(new_ds) - 1):
+                (x_old, y_old), (x_new, y_new) = old_ds[idx], new_ds[idx]
+                assert torch.equal(x_old, x_new) and torch.equal(y_old, y_new), (augment, epoch, idx)
+
+    gen = torch.Generator().manual_seed(0)
+    logits = torch.randn(4, 1, 64, 64, generator=gen) * 3
+    target = (torch.rand(4, 1, 64, 64, generator=gen) > 0.7).float()
+    target[1] = 0  # an empty target exercises the positive-only Dice average
+    assert torch.equal(old.train_refiner.refine_loss(logits, target), refiner.refine_loss(logits, target))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        for per_record in (False, True):
+            out_old, out_new = Path(tmp) / f"old_{per_record}", Path(tmp) / f"new_{per_record}"
+            counts = old.yolo_data.export_yolo(old_ais, val, IMAGES, out_old, per_record=per_record)
+            assert counts == detector.export_yolo(new_recs, val, IMAGES, out_new, per_record)
+            for split in ("train", "val"):
+                labels = [{p.name: p.read_text() for p in (out / "labels" / split).iterdir()}
+                          for out in (out_old, out_new)]
+                assert labels[0] == labels[1] and labels[0], (per_record, split)
+
+
+def test_single_model_primitives_match():
+    _skip_if_missing()
+    import cv2
+    import torch
+    from ultralytics import YOLO
+
+    from filament import inference
+    from filament.data import load_image_gray
+
+    old_anchor, old_pr, old_ref, new_ref, device = _models()
+    old_sd, new_sd = old_ref.state_dict(), new_ref.state_dict()
+    assert list(old_sd) == list(new_sd) and all(torch.equal(old_sd[k], new_sd[k]) for k in old_sd)
+
+    img = load_image_gray(IMAGES, STEMS[0] + ".jpeg")
+    bgr = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    det_args = types.SimpleNamespace(conf=0.20, iou=0.50, imgsz=1280, max_det=300)
+    old_boxes = old_pr.detect_boxes(YOLO(str(DET)), bgr, det_args)
+    new_boxes = inference.detect_boxes(YOLO(str(DET)), bgr, 1280)
+    assert len(old_boxes) == len(new_boxes) > 0
+    for (c_old, b_old), (c_new, b_new) in zip(old_boxes, new_boxes):
+        assert c_old == c_new and b_old.dtype == b_new.dtype and np.array_equal(b_old, b_new)
+
+    box = old_boxes[0][1]
+    p_old, w_old = old_pr.refine_prob(old_ref, img, box, 512, 8, device)
+    p_new, w_new = inference.refine_prob(new_ref, img, box, device, 512, 8)
+    assert w_old == w_new and p_old.dtype == p_new.dtype and np.array_equal(p_old, p_new)
+    assert np.array_equal(old_pr.paste_full(p_old, w_old, *img.shape, 0.5),
+                          inference.paste_full(p_new, w_new, img.shape, 0.5, "bilinear"))
+    assert np.array_equal(old_anchor.paste_mask(p_old, w_old, img.shape, 0.5, "nearest"),
+                          inference.paste_full(p_new, w_new, img.shape, 0.5, "nearest"))
+
+
+def test_ensemble_rows_match():
+    _skip_if_missing()
+    from ultralytics import YOLO
+
+    from filament import ensemble
+    from filament.data import load_image_gray
+
+    old_anchor, _, old_ref, new_ref, device = _models()
+    old_args = types.SimpleNamespace(conf=0.20, iou=0.50, imgsz=1280, max_det=300, vote_iou=0.30, vote_conf=0.40,
+                                     min_votes=5, crop=512, jitter=8, thr=0.50, min_area=200,
+                                     post_paint_min_area=200, min_contrast=0.05)
+    old_dets = [YOLO(str(DET)) for _ in SIZES]
+    new_dets = [YOLO(str(DET)) for _ in SIZES]
+    cfg = ensemble.EnsembleConfig()  # the CLI defaults must be the production configuration
+    assert cfg.sizes == SIZES
+    for stem in STEMS:
+        img = load_image_gray(IMAGES, stem + ".jpeg")
+        old = old_anchor.image_rows(old_dets, [old_ref] * 5, list(SIZES), stem, img, device, old_args, list(MODES))
+        new = ensemble.image_rows(new_dets, [new_ref] * 5, stem, img, device, cfg, MODES)
+        for mode in MODES:
+            assert old[mode] == new[mode], (stem, mode)
+            print(f"{stem} {mode}: {len(new[mode])} identical instances", flush=True)
+
+
+if __name__ == "__main__":
+    if _missing():
+        print("SKIP:", _missing())
+    else:
+        for name, fn in sorted(globals().items()):
+            if name.startswith("test_"):
+                fn()
+                print("ok", name)
