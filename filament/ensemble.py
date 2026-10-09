@@ -8,10 +8,13 @@ Per test image:
      per annotator record of the image, and looser votes that gained recall
      in cross-validation lost on the leaderboard.
   3. The highest-confidence box of a cluster seeds every refiner. Each of the
-     5 fold refiners sees 3 views (identity, vertical flip, horizontal flip);
-     a pixel is kept by a refiner if >= 2 of its views agree, and by the
-     ensemble if >= 3 of 5 refiners keep it (averaging probabilities instead
-     was not better on the leaderboard).
+     5 fold refiners sees 3 views (identity, vertical flip, horizontal flip).
+     Final ("pmean") mask: the 15 probability maps, bilinearly resized to the
+     frame, are averaged and thresholded at 0.5. Nested cross-validation (the
+     whole ensemble retrained without each outer fold) puts this +0.004 PQ
+     above the binary majority ("nearest"/"bilinear": a pixel kept by a
+     refiner if >= 2 of 3 views agree, by the ensemble if >= 3 of 5 refiners
+     do) in every fold, with the same instances kept.
   4. Masks < 200 px are dropped, the rest painted greedily by seed confidence
      without overlap (the host rejects overlapping instances); painted
      fragments < 200 px and masks with ring contrast < 0.05 (not darker than
@@ -130,8 +133,10 @@ def cluster_boxes(per_voter: list[list[tuple[float, np.ndarray]]], vote_iou: flo
 
 def seed_masks(refiners: list[torch.nn.Module], img: np.ndarray, box, device: torch.device,
                cfg: EnsembleConfig, modes: tuple[str, ...]) -> dict[str, np.ndarray]:
-    """Full-frame mask for one seed box: majority over 3 views, then over refiners.
+    """Full-frame mask for one seed box, per mode.
 
+    "nearest"/"bilinear": binary majority over 3 views per refiner, then over
+    refiners. "pmean": mean of all refiner x view probability maps > thr.
     The flipped views flip the whole image (and the box with it), so each view
     is a genuinely different crop context for the network.
     """
@@ -142,20 +147,30 @@ def seed_masks(refiners: list[torch.nn.Module], img: np.ndarray, box, device: to
     views = [(img, box, None),
              (np.flip(img, 0).copy(), (x1, h - y2, x2, h - y1), 0),
              (np.flip(img, 1).copy(), (w - x2, y1, w - x1, y2), 1)]
-    fold_counts = {mode: np.zeros(img.shape, np.uint8) for mode in modes}
+    binary = tuple(mode for mode in modes if mode != "pmean")
+    fold_counts = {mode: np.zeros(img.shape, np.uint8) for mode in binary}
+    prob_sum = np.zeros(img.shape, np.float32)
     for refiner in refiners:
-        flip_counts = {mode: np.zeros(img.shape, np.uint8) for mode in modes}
+        flip_counts = {mode: np.zeros(img.shape, np.uint8) for mode in binary}
         for view, view_box, axis in views:
             prob, win = refine_prob(refiner, view, view_box, device, cfg.crop, cfg.jitter)
-            for mode in modes:
+            if "pmean" in modes:
+                x0, y0, x1, y1 = win
+                full = np.zeros(img.shape, np.float32)
+                full[y0:y1, x0:x1] = cv2.resize(prob, (x1 - x0, y1 - y0), interpolation=cv2.INTER_LINEAR)
+                prob_sum += full if axis is None else np.flip(full, axis)
+            for mode in binary:
                 mask = paste_full(prob, win, img.shape, cfg.thr, mode)
                 if axis is not None:
                     mask = np.flip(mask, axis)
                 flip_counts[mode] += mask
-        for mode in modes:
+        for mode in binary:
             fold_counts[mode] += (flip_counts[mode] >= 2).astype(np.uint8)
     majority = len(refiners) // 2 + 1
-    return {mode: (count >= majority).astype(np.uint8) for mode, count in fold_counts.items()}
+    masks = {mode: (count >= majority).astype(np.uint8) for mode, count in fold_counts.items()}
+    if "pmean" in modes:
+        masks["pmean"] = (prob_sum / (len(views) * len(refiners)) > cfg.thr).astype(np.uint8)
+    return {mode: masks[mode] for mode in modes}
 
 
 def resolve_overlaps(scored: list[tuple[float, np.ndarray]], post_min_area: int = 0) -> list[np.ndarray]:
@@ -196,7 +211,7 @@ def ring_contrast(m: np.ndarray, img: np.ndarray, pad: int = 24) -> float:
 
 def image_rows(dets: list, refiners: list[torch.nn.Module], stem: str, img: np.ndarray, device: torch.device,
                cfg: EnsembleConfig = EnsembleConfig(),
-               modes: tuple[str, ...] = ("nearest",)) -> dict[str, list[tuple[str, str]]]:
+               modes: tuple[str, ...] = ("pmean",)) -> dict[str, list[tuple[str, str]]]:
     """Submission rows ("<stem>_<k>", rle) for one image, per paste mode.
 
     Several paste modes share every network pass, so comparing them costs no
@@ -224,7 +239,7 @@ def image_rows(dets: list, refiners: list[torch.nn.Module], stem: str, img: np.n
 
 
 def predict(dets: list, refiners: list[torch.nn.Module], image_dir: Path, stems: list[str], device: torch.device,
-            cfg: EnsembleConfig = EnsembleConfig(), paste: str = "nearest") -> list[tuple[str, str]]:
+            cfg: EnsembleConfig = EnsembleConfig(), paste: str = "pmean") -> list[tuple[str, str]]:
     """Run image_rows over a list of image stems."""
     rows: list[tuple[str, str]] = []
     start = time.time()
@@ -244,8 +259,8 @@ def main() -> None:
     ap.add_argument("--fold", type=int, default=None,
                     help="instead of the test set, predict fold K's validation images with fold K's own "
                          "detector + refiner only (min votes 1): the leak-free CV check")
-    ap.add_argument("--paste", choices=["nearest", "bilinear"], default="nearest",
-                    help="how crop masks are resized back to the window (nearest = submitted)")
+    ap.add_argument("--paste", choices=["pmean", "nearest", "bilinear"], default="pmean",
+                    help="mask fusion: pmean = mean of 15 probability maps (final); nearest = the Oct-6 LB-0.40 file")
     for f in fields(EnsembleConfig):
         parse = (lambda s: tuple(int(v) for v in s.split(","))) if f.name == "sizes" else type(f.default)
         ap.add_argument("--" + f.name.replace("_", "-"), type=parse, default=f.default, help=f.metadata["help"])

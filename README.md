@@ -44,7 +44,7 @@ has properties that shape every design decision:
      5 fold refiners (U-Net, ResNet-34) x 3 views (identity, vertical flip, horizontal flip)
        input 512 x 512 crop of [image, CLAHE(image), filled padded seed box]
        seed-jitter TTA: 5 seeds shifted by +-8 px, probabilities averaged, threshold 0.5
-       pixel kept if >= 2 of 3 views agree (per refiner), then >= 3 of 5 refiners agree
+       the 15 probability maps (5 refiners x 3 views) are averaged; pixel kept if mean > 0.5
                                             |
           drop masks < 200 px -> paint greedily by seed confidence, no overlap
           -> drop painted fragments < 200 px -> drop masks with ring contrast < 0.05

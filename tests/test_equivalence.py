@@ -174,6 +174,41 @@ def test_ensemble_rows_match():
             print(f"{stem} {mode}: {len(new[mode])} identical instances", flush=True)
 
 
+
+
+def test_pmean_fusion_matches_research():
+    """The final probability-mean fusion equals the research pool dumper's (fast: fake soft refiner)."""
+    if not (SOURCE / "src/ensemble_pool.py").exists() or not (IMAGES / f"{STEMS[0]}.jpeg").exists():
+        import pytest
+
+        pytest.skip("research repo (src/ensemble_pool.py) or images not found")
+    import importlib
+
+    import torch
+
+    from filament import ensemble
+    from filament.data import load_image_gray
+
+    _research()  # puts the research src/ on sys.path
+    pool = importlib.import_module("ensemble_pool")
+
+    class SoftRefiner(torch.nn.Module):
+        def forward(self, x):  # dark pixels inside the seed: graded probabilities, so averaging matters
+            dark = x[:, 0:1].mean(dim=(2, 3), keepdim=True) - x[:, 0:1]
+            return torch.where(x[:, 2:3] > 0, 4.0 * (dark - 0.3), torch.full_like(dark, -10.0))
+
+    img = load_image_gray(IMAGES, STEMS[0] + ".jpeg")
+    box = np.array([900.0, 700.0, 1100.0, 780.0])
+    refs = [SoftRefiner() for _ in range(5)]
+    cfg = ensemble.EnsembleConfig()
+    args = types.SimpleNamespace(crop=cfg.crop, jitter=cfg.jitter, thr=cfg.thr)
+    old, _ = pool.seed_variants(refs, img, box, args, torch.device("cpu"))
+    new = ensemble.seed_masks(refs, img, box, torch.device("cpu"), cfg, ("pmean", "nearest", "bilinear"))
+    for mode in ("pmean", "nearest", "bilinear"):
+        assert np.array_equal(old[mode], new[mode]), mode
+    assert old["pmean"].any() and not np.array_equal(new["pmean"], new["nearest"])
+
+
 if __name__ == "__main__":
     if _missing():
         print("SKIP:", _missing())
