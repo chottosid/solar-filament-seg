@@ -59,21 +59,26 @@ reasoning behind each setting is in the module docstrings.
 
 ## Results
 
-| Model | Fold 0 | Fold 1 | Fold 2 | Fold 3 | Fold 4 | Mean |
+| Model | Fold 0 | Fold 1 | Fold 2 | Fold 3 | Fold 4 | All 707 images |
 |---|---|---|---|---|---|---|
-| Single model per fold, out-of-fold PQ | 0.4151 | 0.4152 | 0.4058 | 0.4024 | 0.3924 | 0.406 |
-| 7-detector / 5-refiner ensemble (this repo's default) | | | | | | public LB **0.40** |
+| Single model per fold (80 % data), out-of-fold PQ | 0.4151 | 0.4152 | 0.4058 | 0.4024 | 0.3924 | 0.406 (mean) |
+| 7 / 5 ensemble, binary-majority masks, nested CV | 0.4361 | 0.4409 | 0.4331 | 0.4496 | 0.4305 | 0.4379 |
+| **7 / 5 ensemble, probability-mean masks (default), nested CV** | **0.4401** | **0.4448** | **0.4361** | **0.4541** | **0.4356** | **0.4421** |
 
-Private leaderboard: *to be added when the competition closes (15 Nov 2026).*
+Public leaderboard (about 50 % of the test set): **0.40** for both ensemble variants;
+single models 0.36-0.37. Private leaderboard: *to be added when the competition closes (15 Nov 2026).*
 
-* Out-of-fold numbers: each fold's own detector and refiner on that fold's
-  validation images, exact organiser PQ. They were measured with the earlier
-  single-model operating point (detector conf >= 0.46, contrast gate before
-  painting, no flip views).
-* The ensemble cannot be cross-validated honestly: the fold 1-4 models were
-  trained on fold 0's images, so any ensemble score on a CV fold is inflated.
-  It was compared against single models on the public leaderboard (about 50 % of
-  the test set; differences of 0.01 are within noise).
+* **Nested cross-validation.** A 5-fold ensemble cannot be scored on its own folds
+  (four of its five members saw every training image). For each outer fold we
+  retrained the complete ensemble (7 detectors, 5 refiners) on day-grouped inner
+  folds of the other 80 % of images (64 % of the data per model, 60 models) and
+  ran it on the held-out 20 %. Probability-mean fusion beats the binary majority
+  by +0.0041 PQ (95 % CI +0.0033 to +0.0049, paired observing-day bootstrap) in
+  every fold, with the same instances kept.
+* Matched filaments agree with each annotator better than annotators agree with
+  each other: mean IoU 0.690 vs 0.634, Dice 0.814 vs 0.773. 1.5 % of filaments are
+  split across two or more of our instances (human vs human: 2.4 %); 3.2 % of our
+  instances cover two or more filaments of one record (human: 3.1 %).
 * Folds group images by observing day (`data/cv_folds.json`), so near-identical
   frames of one day never straddle train and validation.
 
@@ -198,9 +203,9 @@ archive of the 12 files below; unpack it into `weights/`.
 * Inference uses only the test H-alpha images: no neighbouring frames,
   magnetograms or metadata.
 * Model and post-processing settings were chosen by cross-validation on
-  day-grouped folds. The ensemble vote (5 of 7 voters at conf 0.40) was picked
-  from a few candidate settings with public-leaderboard submissions, because
-  the ensemble cannot be cross-validated without leakage (see Results).
+  day-grouped folds, ensemble-level settings by nested cross-validation (see
+  Results). The vote operating point (5 of 7 voters at conf 0.40) is the one the
+  public leaderboard preferred over both looser and stricter rules.
 
 ## Repository layout
 
