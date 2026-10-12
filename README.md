@@ -4,7 +4,7 @@ Instance segmentation of solar filaments in GONG H-alpha full-disk images.
 Seven YOLO11 detectors vote on candidate filaments; box-seeded U-Nets draw
 each candidate's pixels; a gradient-boosting model decides which candidates
 to keep at the vote rule's instance count; extent-robust U-Nets draw the
-final masks, which are painted without overlap. **Public leaderboard: 0.40 PQ.**
+final masks, which are painted without overlap. **Public leaderboard: 0.41 PQ.**
 
 ## The problem
 
@@ -89,8 +89,10 @@ setting is in the module docstrings.
 | + count-matched swap (same instance count), nested CV | 0.4539 | 0.4540 | 0.4443 | 0.4560 | 0.4364 | 0.4488 |
 | **+ extent-robust masks (final pipeline), nested CV** | **0.4541** | **0.4539** | **0.4490** | **0.4588** | **0.4393** | **0.4509** |
 
-Public leaderboard (about 50 % of the test set): **0.40** for every ensemble row
-(the extent-robust row with 12-epoch refiners); single models 0.36-0.37.
+Public leaderboard (about 50 % of the test set): **0.41** for the final pipeline
+(0.40 with 12-epoch extent-robust refiners, and for every other ensemble row);
+single models 0.36-0.37. Two-decimal scores on about 90 images cannot resolve
+differences below 0.01, which is why every choice above was made by nested CV.
 Private leaderboard: *to be added when the competition closes (15 Nov 2026).*
 
 * **Nested cross-validation.** A 5-fold ensemble cannot be scored on its own folds
