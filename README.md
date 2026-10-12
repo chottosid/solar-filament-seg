@@ -1,9 +1,10 @@
 # Solar filament segmentation (Kaggle Solar Filament Segmentation Challenge 2026)
 
 Instance segmentation of solar filaments in GONG H-alpha full-disk images.
-A two-stage pipeline: YOLO11 detectors propose boxes, a box-seeded U-Net
-draws each filament's pixels, and a 7-detector / 5-refiner vote turns them
-into non-overlapping instances. **Public leaderboard: 0.40 PQ.**
+Seven YOLO11 detectors vote on candidate filaments; box-seeded U-Nets draw
+each candidate's pixels; a gradient-boosting model decides which candidates
+to keep at the vote rule's instance count; extent-robust U-Nets draw the
+final masks, which are painted without overlap. **Public leaderboard: 0.40 PQ.**
 
 ## The problem
 
@@ -34,28 +35,49 @@ has properties that shape every design decision:
  2048 x 2048 H-alpha frame
      |
      |--> YOLO11s @1280, folds 0-4 ---------+
-     |--> YOLO11s @1536 (fold-0 split) -----+--> boxes with conf >= 0.20 (7 voters)
-     |--> YOLO11m @1280 (fold-0 split) -----+
+     |--> YOLO11s @1536 (fold-0 split) -----+--> boxes with conf >= 0.20 (7 voters; the same
+     |--> YOLO11m @1280 (fold-0 split) -----+    voters also run on two flipped copies)
                                             |
           union-find: link boxes of different voters with box IoU > 0.30
-          keep a cluster if >= 5 voters have their own conf >= 0.40
-                                            |  seed = the cluster's highest-confidence box
-                                            v
-     5 fold refiners (U-Net, ResNet-34) x 3 views (identity, vertical flip, horizontal flip)
-       input 512 x 512 crop of [image, CLAHE(image), filled padded seed box]
-       seed-jitter TTA: 5 seeds shifted by +-8 px, probabilities averaged, threshold 0.5
-       the 15 probability maps (5 refiners x 3 views) are averaged; pixel kept if mean > 0.5
+          every cluster with >= 2 voters is a candidate; seed = its highest-confidence box
                                             |
-          drop masks < 200 px -> paint greedily by seed confidence, no overlap
-          -> drop painted fragments < 200 px -> drop masks with ring contrast < 0.05
-                                            v
-                         submission.csv (filament_id, COCO RLE)
+          +---------------------------------+-------------------------------+
+          v                                                                 v
+   5 fold refiners, window 1.5 x seed                 5 extent-robust fold refiners, window 2.25 x seed
+   x 3 views (identity, v-flip, h-flip):              x 3 views: 15 probability maps averaged,
+   15 probability maps averaged, kept > 0.5           kept > 0.5 -> the submitted masks
+          |                                                                 |
+          v                                                                 |
+   count-matched swap: gradient boosting predicts each candidate's          |
+   annotator-averaged matched IoU u from 88 features (votes, mask           |
+   shape, pixels, context); keep the top N by u, N = the number of          |
+   instances the 5-of-7 vote rule (5 voters at conf >= 0.40) keeps          |
+          +----------------------------------+------------------------------+
+                                             v
+          paint the kept candidates' extent-robust masks in u order without overlap;
+          drop masks < 200 px before painting, fragments < 200 px after it, and
+          masks whose ring contrast is < 0.05
+                                             v
+                            submission.csv (filament_id, COCO RLE)
 ```
 
 Why two stages: a box is an easy target for a filament whose exact outline
 annotators disagree on, and refining a box crop at roughly 3-5x magnification
-(median window ~140 px, resized to 512) keeps 3-12 px ribbons intact. The
-reasoning behind each setting is in the module docstrings.
+(median window ~140 px, resized to 512) keeps 3-12 px ribbons intact.
+
+Why a selection model at a fixed count: the metric charges a spurious
+instance once per annotator record, and every variant that predicted more
+instances (looser votes, a probability threshold on u) gained in
+cross-validation but lost on the leaderboard. The swap keeps the vote's
+count and changes only *which* candidates are kept (`filament/selection.py`).
+
+Why extent-robust refiners: the production refiner copies its seed box (mask
+length follows box length with slope 0.8-0.9), so a detector box that covers
+half a filament yields half a mask. The extent-robust refiner is trained on
+deliberately short and long seeds inside wider, seed-centred windows with the
+whole filament as target (`--extent-robust` in `filament/refiner.py`); it
+both extends short masks and trims long ones. The reasoning behind every
+setting is in the module docstrings.
 
 ## Results
 
@@ -86,8 +108,9 @@ single models 0.36-0.37. Private leaderboard: *to be added when the competition 
 
 Everything runs from this repository plus the competition data. Training needs
 nothing else (ultralytics and segmentation-models-pytorch fetch the COCO /
-ImageNet starting weights themselves); inference needs only the 12 trained
-weight files (see Model weights) or the output of the training step.
+ImageNet starting weights themselves); inference needs only the 17 trained
+weight files (see Model weights) or the output of the training step, plus the
+selection model's training table, which is committed (`data/uhat_train.csv.gz`).
 
 ### 1. Environment
 
@@ -107,7 +130,7 @@ export MAGFILO_DIR=/kaggle/input/competitions/filament-segmentation-2026/MAGFiLO
 python -m filament.data --check     # the committed fold split regenerates exactly
 ```
 
-### 3. Training (12 models)
+### 3. Training (17 models)
 
 ```bash
 for f in 0 1 2 3 4; do
@@ -117,6 +140,7 @@ python -m filament.detector --fold 0 --imgsz 1536 --out weights/det_s1536_f0.pt
 python -m filament.detector --fold 0 --model yolo11m.pt --batch 6 --out weights/det_m1280_f0.pt
 for f in 0 1 2 3 4; do
   python -m filament.refiner --fold $f --out weights/refiner_f$f.pt
+  python -m filament.refiner --fold $f --extent-robust --out weights/refiner_extent_f$f.pt
 done
 ```
 
@@ -125,21 +149,32 @@ ultralytics defaults otherwise, labels = union of all annotator records'
 boxes. Refiners: 12 epochs, batch 8, AdamW 3e-4, cosine schedule, 0.45 BCE +
 0.55 soft Dice, one sample per (annotator record, filament).
 
+Extent-robust refiners: the same trainer with `--extent-robust` (seeds redrawn
+every epoch: 50 % jittered true boxes, 25 % short seeds covering 0.4-0.85 of
+the spine, 25 % long seeds 1.2-2.0x along the spine's end tangents; a window
+centred on the seed with side c x its long side, c ~ logU[1.5, 3]; target =
+the whole filament).
+
 Runtime on a Kaggle P100: about 35 min per YOLO11s @1280 detector and 45 min
 per refiner (measured); the @1536 and YOLO11m variants take longer (roughly
-1-1.5 h each, estimated). Roughly 9-10 P100 GPU hours in total.
+1-1.5 h each, estimated). Roughly 13-14 P100 GPU hours in total.
 
 ### 4. Inference
 
 ```bash
-python -m filament.ensemble --weights weights --out submission.csv
+# candidate pools: every cluster with >= 2 voters, its votes and its masks
+python -m filament.ensemble --weights weights --pool test_pool.csv.gz
+python -m filament.ensemble --weights weights --refiner-set extent --pool test_pool_extent.csv.gz
+# selection on the first pool, masks from the second (CPU, a few minutes)
+python -m filament.selection --pool test_pool.csv.gz --masks-pool test_pool_extent.csv.gz --out submission.csv
 python -m filament.submission submission.csv --test
 ```
 
-About 25 minutes for the 180 test images on a Kaggle T4 (measured, including
-model loading). CPU works but takes hours. All settings are CLI flags whose
-defaults are the submitted configuration (`python -m filament.ensemble -h`);
-`--paste bilinear` switches to the alternative paste-back.
+Each pool takes about 25 minutes for the 180 test images on a Kaggle T4.
+CPU works but takes hours. All settings are CLI flags whose defaults are the
+submitted configuration (`python -m filament.ensemble -h`). The vote rule
+alone (the earlier LB-0.40 submission) is
+`python -m filament.ensemble --weights weights --out submission.csv`.
 
 ### 5. Leak-free fold check
 
@@ -155,8 +190,10 @@ python -m pytest -q            # or: python tests/test_metric.py, etc.
 ```
 
 `tests/test_equivalence.py` replays this package against the original research
-code and asserts identical training inputs (refiner samples, loss, YOLO labels)
-and identical inference outputs on real checkpoints; it is skipped when that
+code and asserts identical training inputs (refiner samples, loss, YOLO labels,
+extent-robust samples) and identical inference outputs on real checkpoints,
+including the candidate pool; `tests/test_selection.py` rebuilds both submitted
+swap files row for row from the research test pools. Both are skipped when that
 code is not present.
 
 ### Notebook
@@ -170,21 +207,30 @@ predictions.
 
 `WEIGHTS_URL` in `filament/ensemble.py` (placeholder:
 `https://example.com/REPLACE-ME/solar-filament-seg-weights.zip`) points to an
-archive of the 12 files below; unpack it into `weights/`.
+archive of the 17 files below; unpack it into `weights/`.
 
 | File | Model | Trained on | Inference size |
 |---|---|---|---|
 | `det_f0.pt` ... `det_f4.pt` | YOLO11s detector | all folds except k | 1280 |
 | `det_s1536_f0.pt` | YOLO11s detector | all folds except 0 | 1536 |
 | `det_m1280_f0.pt` | YOLO11m detector | all folds except 0 | 1280 |
-| `refiner_f0.pt` ... `refiner_f4.pt` | U-Net / ResNet-34 refiner (state dict) | all folds except k | 512 crop |
+| `refiner_f0.pt` ... `refiner_f4.pt` | U-Net / ResNet-34 refiner (state dict) | all folds except k | 512 crop, window 1.5 x seed |
+| `refiner_extent_f0.pt` ... `refiner_extent_f4.pt` | the same U-Net, `--extent-robust` | all folds except k | 512 crop, window 2.25 x seed |
+
+The selection model is refitted at run time (a few seconds) from
+`data/uhat_train.csv.gz`: one row per candidate cluster of the nested
+cross-validation pools (7,302 clusters of the 707 training images, each
+scored by an ensemble that never saw its image), 88 features plus the target
+u and the image's record count.
 
 ## Exactness notes
 
 * The code was ported from the research repository with every retained
   computation unchanged; `tests/test_equivalence.py` checks refiner training
-  samples, the loss, YOLO label files, detector boxes, probability maps,
-  paste-back and the full ensemble rows (both paste modes) against it.
+  samples (both recipes), the loss, YOLO label files, detector boxes,
+  probability maps, paste-back, the full ensemble rows (both paste modes) and
+  the candidate pool against it; `tests/test_selection.py` checks the 88
+  features and reproduces the submitted selection files exactly.
 * The submitted CSV applied the post-paint 200 px rule as a filter on the
   written file, which kept the original instance numbering (6 ids missing).
   The CLI applies the same rule inside painting and numbers instances
@@ -203,9 +249,11 @@ archive of the 12 files below; unpack it into `weights/`.
 * Inference uses only the test H-alpha images: no neighbouring frames,
   magnetograms or metadata.
 * Model and post-processing settings were chosen by cross-validation on
-  day-grouped folds, ensemble-level settings by nested cross-validation (see
-  Results). The vote operating point (5 of 7 voters at conf 0.40) is the one the
-  public leaderboard preferred over both looser and stricter rules.
+  day-grouped folds, ensemble-level settings (fusion, selection) by nested
+  cross-validation (see Results). The instance count (that of the 5-of-7 vote
+  at conf 0.40) is the one the public leaderboard preferred over both looser
+  and stricter rules.
+* The selection model's training table is built from training images only.
 
 ## Repository layout
 
@@ -216,11 +264,12 @@ filament/
   detector.py    YOLO export (union / per-record labels) and detector training CLI
   refiner.py     box-seed crop dataset, U-Net, loss and refiner training CLI
   inference.py   detector boxes, refiner probability maps, paste-back
-  ensemble.py    voting, majority masks, painting, gates and the prediction CLI
+  ensemble.py    voting, majority masks, painting, gates, candidate pools and the prediction CLI
+  selection.py   count-matched swap: 88 candidate features, u-hat model, selection CLI
   submission.py  RLE helpers and the submission validator CLI
 tests/           assert-based tests (pytest or plain python)
 notebooks/       pipeline.ipynb
-data/            cv_folds.json (+ the competition data, not committed)
+data/            cv_folds.json, uhat_train.csv.gz (+ the competition data, not committed)
 ```
 
 ## License
