@@ -12,7 +12,7 @@ import cv2
 import numpy as np
 import torch
 
-from .refiner import PAD_RATIO, REFINE_CROP, Window, build_refiner, refiner_input, seed_crop, square_bounds
+from .refiner import CONTEXT, PAD_RATIO, REFINE_CROP, Window, build_refiner, refiner_input, seed_crop, square_bounds
 
 
 def detect_boxes(det, bgr: np.ndarray, imgsz: int, conf: float = 0.20, iou: float = 0.50,
@@ -40,17 +40,19 @@ def load_refiner(ckpt: str | Path, device: torch.device) -> torch.nn.Module:
 
 @torch.no_grad()
 def refine_prob(refiner: torch.nn.Module, img: np.ndarray, box_xyxy, device: torch.device,
-                crop: int = REFINE_CROP, jitter_px: int = 8) -> tuple[np.ndarray, Window]:
+                crop: int = REFINE_CROP, jitter_px: int = 8, context: float = CONTEXT) -> tuple[np.ndarray, Window]:
     """Filament probability inside the box's crop window, at crop resolution.
 
     Seed-jitter TTA: the seed box is shifted by +-jitter_px along x and y and
     the five sigmoid maps are averaged, so the mask does not hinge on the exact
-    detector box edges. Returns (prob of shape (crop, crop), window).
+    detector box edges. context = window side / box long side (1.5 for the
+    submitted refiners, INFER_CONTEXT = 2.25 for extent-robust ones).
+    Returns (prob of shape (crop, crop), window).
     """
     h, w = img.shape
     x1, y1, x2, y2 = box_xyxy
     bbox = [float(x1), float(y1), max(1.0, float(x2 - x1)), max(1.0, float(y2 - y1))]
-    win = square_bounds(bbox, h, w)
+    win = square_bounds(bbox, h, w, context=context)
     x0, y0, x1b, y1b = win
     img_c = cv2.resize(img[y0:y1b, x0:x1b], (crop, crop), interpolation=cv2.INTER_LINEAR)
     shifts = [(0, 0)] if jitter_px <= 0 else [(0, 0), (jitter_px, 0), (-jitter_px, 0), (0, jitter_px), (0, -jitter_px)]

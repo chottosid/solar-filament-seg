@@ -43,6 +43,7 @@ class Filament:
     bbox: list[float]  # COCO [x, y, w, h]
     area: float
     category_id: int  # chirality: 1 left, 2 right, 3 unidentifiable, 4 ambiguous
+    spine: list[float] = field(default_factory=list)  # flat centre-line points (extent-robust refiner seeds)
 
 
 @dataclass
@@ -76,7 +77,8 @@ def load_records(json_path: str | Path | None = None) -> list[Record]:
     }
     for a in coco["annotations"]:
         by_id[a["image_id"]].filaments.append(
-            Filament(polygon=a["segmentation"][0], bbox=a["bbox"], area=a["area"], category_id=a["category_id"])
+            Filament(polygon=a["segmentation"][0], bbox=a["bbox"], area=a["area"], category_id=a["category_id"],
+                     spine=a.get("spine", []))
         )
     return list(by_id.values())
 

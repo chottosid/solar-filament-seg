@@ -15,7 +15,15 @@ never the ground-truth mask, which would leak the answer.
 Training uses one sample per (annotator record, filament), so annotator
 disagreement acts as label noise the model averages over.
 
+Extent-robust variant (--extent-robust, ExtentRobustDataset): the refiner
+above copies its seed box (mask length follows seed length 1:1 and never
+leaves the padded seed), so a detector box that covers half a filament gives
+half a mask. This variant trains on short and long seeds drawn along the
+filament's spine, a window centred on the seed with a random context, and the
+whole filament as target; inference then uses a 2.25x window (INFER_CONTEXT).
+
     python -m filament.refiner --fold 0 --out weights/refiner_f0.pt
+    python -m filament.refiner --fold 0 --extent-robust --out weights/refiner_extent_f0.pt
 """
 
 from __future__ import annotations
@@ -123,8 +131,10 @@ class RefinerDataset(Dataset):
     """One sample per (annotator record, filament): jittered seed box -> that record's polygon.
 
     The crop window comes from the un-jittered ground-truth box, the seed from
-    the jittered one. Randomness is a pure function of (index, epoch), so every
-    epoch draws fresh jitter and flips yet runs are repeatable sample by sample.
+    the jittered one. Randomness is a pure function of (index, epoch), but the
+    training DataLoader's persistent workers keep the copy of the dataset they
+    started with (epoch 0): in the submitted runs every sample kept one jitter
+    and flip draw for all epochs. ExtentRobustDataset redraws every epoch.
     """
 
     def __init__(self, records: list[Record], images_dir: Path, crop: int = REFINE_CROP, augment: bool = True):
@@ -163,6 +173,134 @@ class RefinerDataset(Dataset):
         x = refiner_input(np.ascontiguousarray(img_c), np.ascontiguousarray(seed_c))
         y = torch.from_numpy(np.ascontiguousarray(tgt_c).astype(np.float32))[None]
         return torch.from_numpy(x), y
+
+
+SEED_MIX = (0.50, 0.25, 0.25)  # extent-robust seeds: production jitter, short, long
+SHORT_COV, LONG_COV = (0.40, 0.85), (1.20, 2.00)  # fraction of the spine's arc length a seed covers
+CTX_RANGE = (1.5, 3.0)  # training window side / seed long side, log-uniform
+INFER_CONTEXT = 2.25  # inference window for extent-robust refiners
+MIN_PERTURB_LEN = 40.0  # px of spine; shorter filaments always get the production jitter
+
+
+def axis_points(f: Filament, step: float = 1.0) -> tuple[np.ndarray, np.ndarray]:
+    """Spine resampled every `step` px as (xy (n, 2), arc length s (n,)); polygon major axis if no spine."""
+    p = np.asarray(f.spine, float).reshape(-1, 2) if len(f.spine) >= 4 else np.zeros((0, 2))
+    if len(p):
+        p = p[np.r_[True, np.linalg.norm(np.diff(p, axis=0), axis=1) > 1e-6]]
+    if len(p) < 2:
+        q = np.asarray(f.polygon, float).reshape(-1, 2)
+        c = q.mean(0)
+        u = np.linalg.eigh(np.cov((q - c).T))[1][:, -1]
+        t = (q - c) @ u
+        p = np.stack([c + t.min() * u, c + t.max() * u])
+    sn = np.r_[0.0, np.cumsum(np.linalg.norm(np.diff(p, axis=0), axis=1))]
+    s = np.arange(0.0, sn[-1] + 1e-9, step) if sn[-1] > 0 else np.zeros(1)
+    return np.c_[np.interp(s, sn, p[:, 0]), np.interp(s, sn, p[:, 1])], s
+
+
+def interval_box(f: Filament, lo: float, hi: float, h: int, w: int) -> list[float]:
+    """xywh box around the part of the filament whose arc length lies in [lo, hi].
+
+    [lo, hi] may exceed [0, L]: the spine is then extended straight along its end tangents.
+    """
+    from scipy.spatial import cKDTree
+
+    xy, s = axis_points(f)
+    L = float(s[-1])
+    half = float(np.clip(f.area / max(L, 1.0), 2.0, 64.0)) / 2
+    q = np.asarray(f.polygon, float).reshape(-1, 2)
+    edges = np.diff(np.vstack([q, q[:1]]), axis=0)
+    n = np.maximum(1, np.ceil(np.linalg.norm(edges, axis=1)).astype(int))
+    boundary = np.vstack([q[i] + edges[i] * np.arange(k)[:, None] / k for i, k in enumerate(n)])
+    sb = s[cKDTree(xy).query(boundary)[1]]
+    pts = [boundary[(sb >= lo) & (sb <= hi)], xy[(s >= lo) & (s <= hi)]]
+    k = min(len(xy) - 1, 8)
+    if lo < 0:
+        d = xy[0] - xy[k]
+        pts.append(xy[0] + d / max(np.linalg.norm(d), 1e-9) * np.arange(0.0, -lo + 1)[:, None])
+    if hi > L:
+        d = xy[-1] - xy[-1 - k]
+        pts.append(xy[-1] + d / max(np.linalg.norm(d), 1e-9) * np.arange(0.0, hi - L + 1)[:, None])
+    axis_pts = np.vstack(pts[1:]) if len(pts) > 1 else np.zeros((0, 2))
+    allp = np.vstack([pts[0], axis_pts - half, axis_pts + half])
+    x0, y0 = np.clip(allp.min(0), 0, [w - 2, h - 2])
+    x1, y1 = np.clip(allp.max(0), [x0 + 2, y0 + 2], [w, h])
+    return [float(x0), float(y0), float(x1 - x0), float(y1 - y0)]
+
+
+def mild_jitter(bbox: list[float], h: int, w: int, rng: random.Random, frac: float = 0.05) -> list[float]:
+    """+-5 % shift and scale of a short/long seed box."""
+    x, y, bw, bh = bbox
+    cx = x + bw / 2 + rng.uniform(-frac, frac) * bw
+    cy = y + bh / 2 + rng.uniform(-frac, frac) * bh
+    bw, bh = max(8.0, bw * rng.uniform(1 - frac, 1 + frac)), max(8.0, bh * rng.uniform(1 - frac, 1 + frac))
+    x, y = float(np.clip(cx - bw / 2, 0, w - 2)), float(np.clip(cy - bh / 2, 0, h - 2))
+    return [x, y, float(min(bw, w - x)), float(min(bh, h - y))]
+
+
+def sample_seed_window(f: Filament, h: int, w: int, rng: random.Random) -> dict:
+    """Seed box (xywh), pad and window for one extent-robust sample.
+
+    50 % production jitter; 25 % short: a box around a stretch covering 0.4-0.85
+    of the spine (half centred, half anchored at a random end); 25 % long: the
+    spine stretched to 1.2-2.0x along its end tangents. The window is centred
+    on the seed, side = c x seed long side with c log-uniform in [1.5, 3].
+    """
+    L = float(axis_points(f)[1][-1])
+    u = rng.random()
+    kind = "in" if L < MIN_PERTURB_LEN or u < SEED_MIX[0] else ("short" if u < SEED_MIX[0] + SEED_MIX[1] else "long")
+    if kind == "in":
+        bbox, pad = jitter_bbox(f.bbox, h, w, rng)
+    else:
+        if kind == "short":
+            length = rng.uniform(*SHORT_COV) * L
+            lo = (L - length) / 2 if rng.random() < 0.5 else rng.choice([0.0, L - length])
+            hi = lo + length
+        else:
+            extra = (rng.uniform(*LONG_COV) - 1.0) * L
+            a = rng.random()
+            lo, hi = -a * extra, L + (1 - a) * extra
+        bbox = mild_jitter(interval_box(f, lo, hi, h, w), h, w, rng)
+        pad = rng.uniform(PAD_RATIO * 0.5, PAD_RATIO * 1.5)
+    ctx = math.exp(rng.uniform(math.log(CTX_RANGE[0]), math.log(CTX_RANGE[1])))
+    return {"kind": kind, "bbox": bbox, "pad": pad, "ctx": ctx, "win": square_bounds(bbox, h, w, context=ctx)}
+
+
+class ExtentRobustDataset(RefinerDataset):
+    """RefinerDataset with extent-perturbed seeds, seed-centred random-context windows and soft
+    whole-filament targets (INTER_AREA-resized). augment=False is deterministic per index (same
+    seed mix, no flips), so the validation crop Dice tracks extent robustness."""
+
+    def __init__(self, records: list[Record], images_dir: Path, crop: int = REFINE_CROP, augment: bool = True):
+        super().__init__(records, images_dir, crop=crop, augment=augment)
+        self._draw = 0
+
+    def sample(self, idx: int, rng: random.Random) -> tuple[torch.Tensor, torch.Tensor, dict]:
+        rec, f = self.items[idx]
+        img = load_image_gray(self.images_dir, rec.file_name)
+        h, w = img.shape
+        meta = sample_seed_window(f, h, w, rng)
+        x0, y0, x1, y1 = meta["win"]
+        img_c = cv2.resize(img[y0:y1, x0:x1], (self.crop, self.crop), interpolation=cv2.INTER_LINEAR)
+        tgt = rasterize_in_window(f.polygon, x0, y0, x1, y1).astype(np.float32)
+        tgt_c = cv2.resize(tgt, (self.crop, self.crop), interpolation=cv2.INTER_AREA)
+        seed_c = seed_crop(meta["bbox"], meta["pad"], meta["win"], self.crop)
+        if self.augment and rng.random() < 0.5:
+            img_c, seed_c, tgt_c = np.fliplr(img_c), np.fliplr(seed_c), np.fliplr(tgt_c)
+        if self.augment and rng.random() < 0.5:
+            img_c, seed_c, tgt_c = np.flipud(img_c), np.flipud(seed_c), np.flipud(tgt_c)
+        x = refiner_input(np.ascontiguousarray(img_c), np.ascontiguousarray(seed_c))
+        y = torch.from_numpy(np.ascontiguousarray(tgt_c).astype(np.float32))[None]
+        return torch.from_numpy(x), y, meta
+
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        if self.augment:  # persistent workers never see `epoch` updates: count draws per process instead
+            self._draw += 1
+            rng = random.Random(f"{idx}/{self.epoch}/{self._draw}")
+        else:
+            rng = random.Random(idx * 1_000_003 + 7)
+        x, y, _ = self.sample(idx, rng)
+        return x, y
 
 
 def build_refiner(pretrained: bool = True) -> torch.nn.Module:
@@ -219,7 +357,7 @@ def crop_dice(model: torch.nn.Module, ds: RefinerDataset, device: torch.device, 
     return float(np.mean(dices)) if dices else 0.0
 
 
-def train_refiner(fold: int, out: Path, epochs: int = 12, batch: int = 8) -> float:
+def train_refiner(fold: int, out: Path, epochs: int = 12, batch: int = 8, extent_robust: bool = False) -> float:
     """Train on the other four folds, keep the epoch with the best fold crop Dice.
 
     AdamW (lr 3e-4, wd 1e-4), cosine schedule, mixed precision on CUDA.
@@ -229,8 +367,9 @@ def train_refiner(fold: int, out: Path, epochs: int = 12, batch: int = 8) -> flo
     images_dir = data_root() / TRAIN_IMAGES
     records = load_records()
     val_stems = fold_stems(fold)
-    train_ds = RefinerDataset([r for r in records if r.stem not in val_stems], images_dir, augment=True)
-    val_ds = RefinerDataset([r for r in records if r.stem in val_stems], images_dir, augment=False)
+    ds_cls = ExtentRobustDataset if extent_robust else RefinerDataset
+    train_ds = ds_cls([r for r in records if r.stem not in val_stems], images_dir, augment=True)
+    val_ds = ds_cls([r for r in records if r.stem in val_stems], images_dir, augment=False)
     dl = DataLoader(
         train_ds,
         batch_size=batch,
@@ -279,8 +418,9 @@ def main() -> None:
     ap.add_argument("--out", type=Path, required=True, help="best checkpoint path, e.g. weights/refiner_f0.pt")
     ap.add_argument("--epochs", type=int, default=12, help="training epochs (cosine schedule)")
     ap.add_argument("--batch", type=int, default=8, help="batch size")
+    ap.add_argument("--extent-robust", action="store_true", help="short/long spine seeds, random-context windows")
     args = ap.parse_args()
-    train_refiner(args.fold, args.out, args.epochs, args.batch)
+    train_refiner(args.fold, args.out, args.epochs, args.batch, args.extent_robust)
 
 
 if __name__ == "__main__":

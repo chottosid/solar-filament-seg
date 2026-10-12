@@ -58,7 +58,7 @@ def _research() -> types.SimpleNamespace:
 
     sys.dont_write_bytecode = True  # leave the research tree untouched
     sys.path.insert(0, str(SOURCE / "src"))
-    names = ("anchor_ensemble", "predict_refine", "refiner_data", "train_refiner", "yolo_data", "data")
+    names = ("anchor_ensemble", "predict_refine", "refiner_data", "refiner_extent", "train_refiner", "yolo_data", "data")
     return types.SimpleNamespace(**{name: importlib.import_module(name) for name in names})
 
 
@@ -100,6 +100,13 @@ def test_training_inputs_match():
             for idx in (0, 1, 777, len(new_ds) - 1):
                 (x_old, y_old), (x_new, y_new) = old_ds[idx], new_ds[idx]
                 assert torch.equal(x_old, x_new) and torch.equal(y_old, y_new), (augment, epoch, idx)
+
+    for augment in (True, False):  # extent-robust samples: same draws (per-call counter) -> same tensors
+        old_ds = old.refiner_extent.ExtentRobustDataset([a for a in old_ais if a.stem not in val], IMAGES, augment=augment)
+        new_ds = refiner.ExtentRobustDataset([r for r in new_recs if r.stem not in val], IMAGES, augment=augment)
+        for idx in (0, 1, 777, 777, len(new_ds) - 1):
+            (x_old, y_old), (x_new, y_new) = old_ds[idx], new_ds[idx]
+            assert torch.equal(x_old, x_new) and torch.equal(y_old, y_new), ("extent", augment, idx)
 
     gen = torch.Generator().manual_seed(0)
     logits = torch.randn(4, 1, 64, 64, generator=gen) * 3
