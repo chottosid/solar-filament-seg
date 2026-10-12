@@ -58,7 +58,8 @@ def _research() -> types.SimpleNamespace:
 
     sys.dont_write_bytecode = True  # leave the research tree untouched
     sys.path.insert(0, str(SOURCE / "src"))
-    names = ("anchor_ensemble", "predict_refine", "refiner_data", "refiner_extent", "train_refiner", "yolo_data", "data")
+    names = ("anchor_ensemble", "ensemble_pool", "predict_refine", "refiner_data", "refiner_extent", "train_refiner",
+             "yolo_data", "data")
     return types.SimpleNamespace(**{name: importlib.import_module(name) for name in names})
 
 
@@ -224,3 +225,50 @@ if __name__ == "__main__":
             if name.startswith("test_"):
                 fn()
                 print("ok", name)
+
+
+def test_candidate_pool_matches_research():
+    """filament.ensemble.image_pool == the research pool dumper, column for column (fake models, one real image)."""
+    _skip_if_missing()
+    import torch
+
+    from filament.data import load_image_gray, load_records
+    from filament.ensemble import EnsembleConfig, image_pool
+
+    class Boxes:
+        def __init__(self, items):
+            self.xyxy = torch.tensor([b for _, b in items], dtype=torch.float32).reshape(-1, 4)
+            self.conf = torch.tensor([c for c, _ in items], dtype=torch.float32)
+
+        def __len__(self):
+            return len(self.conf)
+
+    class Det:  # fixed boxes, also on flipped inputs (the flip votes then land elsewhere)
+        def __init__(self, items):
+            self.items = items
+
+        def predict(self, **kw):
+            return [types.SimpleNamespace(boxes=Boxes([(c, b) for c, b in self.items if c >= kw["conf"]]))]
+
+    class Refiner(torch.nn.Module):  # soft, image-dependent logits inside the seed
+        def forward(self, x):
+            dark = x[:, 0:1].mean(dim=(2, 3), keepdim=True) - x[:, 0:1]
+            return torch.where(x[:, 2:3] > 0, 20.0 * (dark - 0.3), torch.full_like(dark, -10.0))
+
+    old = _research()
+    stem = STEMS[0]
+    rec = next(r for r in load_records(IMAGES.parent / "MAGFiLO_1.0_Annotations_kaggle2026_train.json")
+               if r.stem == stem and len(r.filaments) >= 3)
+    gt = [[x, y, x + w, y + h] for x, y, w, h in sorted((f.bbox for f in rec.filaments), key=lambda b: -b[2] * b[3])[:3]]
+    dets = [Det([(0.9 - 0.02 * v, gt[0])] + ([(0.45, gt[1])] if v < 5 else []) + ([(0.3, gt[2])] if v < 2 else []))
+            for v in range(7)]
+    refiners, device, img = [Refiner() for _ in range(5)], torch.device("cpu"), load_image_gray(IMAGES, stem + ".jpeg")
+    for context in (1.5, 2.25):
+        args = types.SimpleNamespace(conf=0.20, iou=0.50, vote_iou=0.30, max_det=300, thr=0.50, crop=512, jitter=8,
+                                     context=context, extra=())
+        expected = old.ensemble_pool.image_pool(dets, refiners, list(SIZES), stem, img, device, args)
+        got = image_pool(dets, refiners, stem, img, device, EnsembleConfig(context=context))
+        assert len(got) == len(expected) == 3, (len(got), len(expected))
+        for g, e in zip(got, expected):
+            assert g == {k: e[k] for k in g}, context
+
