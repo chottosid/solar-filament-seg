@@ -84,11 +84,14 @@ setting is in the module docstrings.
 | Model | Fold 0 | Fold 1 | Fold 2 | Fold 3 | Fold 4 | All 707 images |
 |---|---|---|---|---|---|---|
 | Single model per fold (80 % data), out-of-fold PQ | 0.4151 | 0.4152 | 0.4058 | 0.4024 | 0.3924 | 0.406 (mean) |
-| 7 / 5 ensemble, binary-majority masks, nested CV | 0.4361 | 0.4409 | 0.4331 | 0.4496 | 0.4305 | 0.4379 |
-| **7 / 5 ensemble, probability-mean masks (default), nested CV** | **0.4401** | **0.4448** | **0.4361** | **0.4541** | **0.4356** | **0.4421** |
+| 7 / 5 vote rule, binary-majority masks, nested CV | 0.4361 | 0.4409 | 0.4331 | 0.4496 | 0.4305 | 0.4379 |
+| 7 / 5 vote rule, probability-mean masks, nested CV | 0.4401 | 0.4448 | 0.4361 | 0.4541 | 0.4356 | 0.4421 |
+| + count-matched swap (same instance count), nested CV | 0.4539 | 0.4540 | 0.4443 | 0.4560 | 0.4364 | 0.4488 |
+| **+ extent-robust masks (final pipeline), nested CV** | **0.4541** | **0.4539** | **0.4490** | **0.4588** | **0.4393** | **0.4509** |
 
-Public leaderboard (about 50 % of the test set): **0.40** for both ensemble variants;
-single models 0.36-0.37. Private leaderboard: *to be added when the competition closes (15 Nov 2026).*
+Public leaderboard (about 50 % of the test set): **0.40** for every ensemble row
+(the extent-robust row with 12-epoch refiners); single models 0.36-0.37.
+Private leaderboard: *to be added when the competition closes (15 Nov 2026).*
 
 * **Nested cross-validation.** A 5-fold ensemble cannot be scored on its own folds
   (four of its five members saw every training image). For each outer fold we
@@ -96,11 +99,17 @@ single models 0.36-0.37. Private leaderboard: *to be added when the competition 
   folds of the other 80 % of images (64 % of the data per model, 60 models) and
   ran it on the held-out 20 %. Probability-mean fusion beats the binary majority
   by +0.0041 PQ (95 % CI +0.0033 to +0.0049, paired observing-day bootstrap) in
-  every fold, with the same instances kept.
+  every fold, with the same instances kept. The count-matched swap adds +0.0067
+  (+0.0029 to +0.0104), and painting its choice with extent-robust masks
+  (25 more nested refiners) brings the total to +0.0088 (+0.0048 to +0.0127)
+  over the vote rule, positive in every fold. The final refiners train for 24
+  epochs instead of the nested runs' 12, worth a further +0.0020 (+0.0008 to
+  +0.0032) per refiner on identical nested seed boxes, all five folds.
 * Matched filaments agree with each annotator better than annotators agree with
-  each other: mean IoU 0.690 vs 0.634, Dice 0.814 vs 0.773. 1.5 % of filaments are
-  split across two or more of our instances (human vs human: 2.4 %); 3.2 % of our
-  instances cover two or more filaments of one record (human: 3.1 %).
+  each other: mean IoU 0.693 vs 0.634, Dice 0.816 vs 0.773. 1.2 % of filaments are
+  split across two or more of our instances (human vs human: 2.4 %); 2.6 % of our
+  instances cover two or more filaments of one record (human: 3.1 %). Median
+  ribbon width (2 area / perimeter) 9.8 px vs 8.3 px for annotators.
 * Folds group images by observing day (`data/cv_folds.json`), so near-identical
   frames of one day never straddle train and validation.
 
@@ -140,7 +149,7 @@ python -m filament.detector --fold 0 --imgsz 1536 --out weights/det_s1536_f0.pt
 python -m filament.detector --fold 0 --model yolo11m.pt --batch 6 --out weights/det_m1280_f0.pt
 for f in 0 1 2 3 4; do
   python -m filament.refiner --fold $f --out weights/refiner_f$f.pt
-  python -m filament.refiner --fold $f --extent-robust --out weights/refiner_extent_f$f.pt
+  python -m filament.refiner --fold $f --extent-robust --epochs 24 --out weights/refiner_extent_f$f.pt
 done
 ```
 
@@ -153,11 +162,13 @@ Extent-robust refiners: the same trainer with `--extent-robust` (seeds redrawn
 every epoch: 50 % jittered true boxes, 25 % short seeds covering 0.4-0.85 of
 the spine, 25 % long seeds 1.2-2.0x along the spine's end tangents; a window
 centred on the seed with side c x its long side, c ~ logU[1.5, 3]; target =
-the whole filament).
+the whole filament) and 24 epochs: with fresh seeds every epoch, longer
+training helps (+0.0020 PQ over 12 epochs, single refiner, all five folds).
 
 Runtime on a Kaggle P100: about 35 min per YOLO11s @1280 detector and 45 min
-per refiner (measured); the @1536 and YOLO11m variants take longer (roughly
-1-1.5 h each, estimated). Roughly 13-14 P100 GPU hours in total.
+per refiner (measured; about 90 min for a 24-epoch extent-robust refiner); the
+@1536 and YOLO11m variants take longer (roughly 1-1.5 h each, estimated).
+Roughly 17 P100 GPU hours in total.
 
 ### 4. Inference
 
@@ -217,7 +228,7 @@ archive of the 17 files below; unpack it into `weights/`.
 | `det_s1536_f0.pt` | YOLO11s detector | all folds except 0 | 1536 |
 | `det_m1280_f0.pt` | YOLO11m detector | all folds except 0 | 1280 |
 | `refiner_f0.pt` ... `refiner_f4.pt` | U-Net / ResNet-34 refiner (state dict) | all folds except k | 512 crop, window 1.5 x seed |
-| `refiner_extent_f0.pt` ... `refiner_extent_f4.pt` | the same U-Net, `--extent-robust` | all folds except k | 512 crop, window 2.25 x seed |
+| `refiner_extent_f0.pt` ... `refiner_extent_f4.pt` | the same U-Net, `--extent-robust`, 24 epochs | all folds except k | 512 crop, window 2.25 x seed |
 
 The selection model is refitted at run time (a few seconds) from
 `data/uhat_train.csv.gz`: one row per candidate cluster of the nested
