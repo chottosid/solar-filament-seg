@@ -1,6 +1,8 @@
 # competition data (keep the committed fold split)
 data/*
 !data/cv_folds.json
+!data/uhat_train.csv.gz
+!data/weights.sha256
 
 # model weights and training runs
 weights/

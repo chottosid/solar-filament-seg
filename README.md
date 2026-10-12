@@ -220,7 +220,9 @@ predictions.
 
 `WEIGHTS_URL` in `filament/ensemble.py` (placeholder:
 `https://example.com/REPLACE-ME/solar-filament-seg-weights.zip`) points to an
-archive of the 17 files below; unpack it into `weights/`.
+archive of the 17 files below; unpack it into `weights/` and check them with
+`cd weights && sha256sum -c ../data/weights.sha256` (the files that made the
+submissions).
 
 | File | Model | Trained on | Inference size |
 |---|---|---|---|
