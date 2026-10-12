@@ -170,8 +170,10 @@ python -m filament.selection --pool test_pool.csv.gz --masks-pool test_pool_exte
 python -m filament.submission submission.csv --test
 ```
 
-Each pool takes about 25 minutes for the 180 test images on a Kaggle T4.
-CPU works but takes hours. All settings are CLI flags whose defaults are the
+Each pool took 54-55 minutes for the 180 test images on a Kaggle T4
+(measured end to end, including package setup; 21 detector passes per image
+and 75 refiner passes per candidate: 5 refiners x 3 views x 5 shifted seeds). CPU
+works but takes many hours. All settings are CLI flags whose defaults are the
 submitted configuration (`python -m filament.ensemble -h`). The vote rule
 alone (the earlier LB-0.40 submission) is
 `python -m filament.ensemble --weights weights --out submission.csv`.
