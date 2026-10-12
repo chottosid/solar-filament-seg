@@ -1,9 +1,10 @@
 """Count-matched swap selection vs the submitted files (needs the research repository's test pools).
 
 The research test pools (production detectors; production or extent-robust refiners) plus
-data/uhat_train.csv.gz must reproduce the two submitted CSVs row for row:
-swap selection with production masks (LB 0.40) and with extent-robust masks (LB 0.40).
-Skipped without the research repository (default ../SOLAR_FILAMENT or $FS26_SOURCE). ~5 min on CPU.
+data/uhat_train.csv.gz must reproduce the submitted CSVs row for row: swap selection with
+production masks (LB 0.40), with 12-epoch extent-robust masks (LB 0.40) and with the final
+24-epoch extent-robust masks. Skipped without the research repository (default ../SOLAR_FILAMENT
+or $FS26_SOURCE). ~30 min on CPU.
 """
 
 import os
@@ -19,13 +20,16 @@ import pandas as pd  # noqa: E402
 SOURCE = Path(os.environ.get("FS26_SOURCE", REPO.parent / "SOLAR_FILAMENT"))
 POOL = SOURCE / "kernel_out/test_pool/pool_test.csv.gz"
 POOL_EXTENT = SOURCE / "kernel_out/test_pool_extent/pool_test_extent.csv.gz"
+POOL_EXTENT24 = SOURCE / "kernel_out/test_pool_extent24/pool_test_extent24.csv.gz"
 SUBMITTED = SOURCE / "out/analysis/selection/submission_swap_deploy.csv"
 SUBMITTED_EXTENT = SOURCE / "out/submission_swap_extent.csv"
+SUBMITTED_EXTENT24 = SOURCE / "out/submission_swap_extent24.csv"
 FEATS = SOURCE / "out/analysis/selection/feats_test.csv.gz"
 
 
 def test_swap_reproduces_submissions():
-    missing = [p for p in (POOL, POOL_EXTENT, SUBMITTED, SUBMITTED_EXTENT, FEATS) if not p.exists()]
+    missing = [p for p in (POOL, POOL_EXTENT, POOL_EXTENT24, SUBMITTED, SUBMITTED_EXTENT, SUBMITTED_EXTENT24, FEATS)
+               if not p.exists()]
     if missing:
         import pytest
 
@@ -35,13 +39,13 @@ def test_swap_reproduces_submissions():
     from filament.selection import count_matched, design, fit_uhat
 
     image_dir = data_root() / TEST_IMAGES
-    pool, extent = pd.read_csv(POOL), pd.read_csv(POOL_EXTENT)
+    pool, extent, extent24 = pd.read_csv(POOL), pd.read_csv(POOL_EXTENT), pd.read_csv(POOL_EXTENT24)
     X = design(pool, image_dir)
     ref = pd.read_csv(FEATS, index_col=0)  # research features (written/read through CSV: ~1 ulp)
     assert np.allclose(X[ref.columns].to_numpy(float), ref.to_numpy(float), rtol=1e-9, atol=1e-12, equal_nan=True)
     model, cols = fit_uhat()
     score = model.predict(X[cols])
-    for masks, submitted in ((None, SUBMITTED), (extent, SUBMITTED_EXTENT)):
+    for masks, submitted in ((None, SUBMITTED), (extent, SUBMITTED_EXTENT), (extent24, SUBMITTED_EXTENT24)):
         rows = count_matched(pool, score, image_dir, masks)
         assert rows == list(map(tuple, pd.read_csv(submitted).to_numpy())), submitted.name
 
