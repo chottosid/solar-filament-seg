@@ -11,7 +11,7 @@ final masks, which are painted without overlap. **Public leaderboard: 0.41 PQ**
 
 Each test image is a 2048 x 2048 H-alpha frame of the full solar disk.
 Filaments are dark, elongated absorption features in the chromosphere: thin
-ribbons only 3-12 px wide (median area about 1,200 px), often faint against
+ribbons only 5-15 px wide (median area about 1,200 px), often faint against
 limb darkening. Training data is MAGFiLO 1.0 (Kaggle 2026 release): 707
 images, 1,154 annotator records, 8,199 filament polygons; 296 images were
 labelled independently by two or three annotators. The test set has 180
@@ -27,7 +27,7 @@ has properties that shape every design decision:
 |---|---|
 | **Pooled**: TP IoUs, FP and FN are summed over the whole test set, then PQ = sum(TP IoU) / (TP + FP/2 + FN/2) | Images with many filaments dominate; no per-image averaging. |
 | **Scored against each annotator record**: an image with three records scores the same predictions three times | A spurious instance costs one FP *per record*. A filament only one of three annotators drew earns one TP but two FPs if predicted, and one FN if not: a candidate pays only when its annotator-averaged matched IoU exceeds PQ/2 (about 0.2). |
-| **TP = IoU > 0.5, all pairs**: no one-to-one matching; FP/FN come from the rows and columns of the hit matrix | Mask quality on 3-12 px ribbons decides TPs: a 1 px boundary shift can move IoU across 0.5. |
+| **TP = IoU > 0.5, all pairs**: no one-to-one matching; FP/FN come from the rows and columns of the hit matrix | Mask quality on 5-15 px ribbons decides TPs: a 1 px boundary shift can move IoU across 0.5. |
 | **Non-overlap requirement**: overlapping instances make the host reject the file | Masks are painted greedily into a single label map, and every CSV is validated (`filament/submission.py`). |
 
 ## Pipeline
@@ -64,7 +64,7 @@ has properties that shape every design decision:
 
 Why two stages: a box is an easy target for a filament whose exact outline
 annotators disagree on, and refining a box crop at roughly 3-5x magnification
-(median window ~140 px, resized to 512) keeps 3-12 px ribbons intact.
+(median window ~140 px, resized to 512) keeps 5-15 px ribbons intact.
 
 Why a selection model at a fixed count: the metric charges a spurious
 instance once per annotator record, and every variant that predicted more

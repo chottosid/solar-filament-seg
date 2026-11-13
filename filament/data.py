@@ -37,7 +37,7 @@ TEST_IMAGES = "test/test_images"
 
 @dataclass
 class Filament:
-    """One annotated filament: a thin dark ribbon, typically 3-12 px wide."""
+    """One annotated filament: a thin dark ribbon, typically 5-15 px wide."""
 
     polygon: list[float]  # flat [x0, y0, x1, y1, ...] in pixels
     bbox: list[float]  # COCO [x, y, w, h]

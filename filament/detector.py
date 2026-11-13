@@ -71,7 +71,7 @@ def train_detector(fold: int, out: Path, model: str = "yolo11s.pt", imgsz: int =
                    epochs: int = 40, work: Path = Path("runs"), per_record: bool = False) -> Path:
     """Export fold `fold` and train one YOLO model on the other folds; copy best.pt to `out`.
 
-    imgsz 1280 (not the 640 default): boxes of 3-12 px wide filaments must
+    imgsz 1280 (not the 640 default): boxes of 5-15 px wide filaments must
     survive the letterbox downscale of the 2048 px frame. Everything else is
     ultralytics' default augmentation; seed 42, early stop after 10 flat epochs.
     """
