@@ -4,7 +4,8 @@ Instance segmentation of solar filaments in GONG H-alpha full-disk images.
 Seven YOLO11 detectors vote on candidate filaments; box-seeded U-Nets draw
 each candidate's pixels; a gradient-boosting model decides which candidates
 to keep at the vote rule's instance count; extent-robust U-Nets draw the
-final masks, which are painted without overlap. **Public leaderboard: 0.41 PQ.**
+final masks, which are painted without overlap. **Public leaderboard: 0.41 PQ**
+(`results/submission_x48.csv`, Kaggle submission 58306582).
 
 ## The problem
 
@@ -89,9 +90,10 @@ setting is in the module docstrings.
 | + count-matched swap (same instance count), nested CV | 0.4539 | 0.4540 | 0.4443 | 0.4560 | 0.4364 | 0.4488 |
 | **+ extent-robust masks (final pipeline), nested CV** | **0.4541** | **0.4539** | **0.4490** | **0.4588** | **0.4393** | **0.4509** |
 
-Public leaderboard (about 50 % of the test set): **0.41** for the final pipeline
-(0.40 with 12-epoch extent-robust refiners, and for every other ensemble row);
-single models 0.36-0.37. Two-decimal scores on about 90 images cannot resolve
+Public leaderboard (about 50 % of the test set), final pipelines by refiner
+training length: 12 epochs 0.40, 24 epochs 0.41 (submission 57106989), **48 epochs
+0.41 (submission 58306582, the submitted file)**; every other ensemble row 0.40 or
+lower; single models 0.36-0.37. Two-decimal scores on about 90 images cannot resolve
 differences below 0.01, which is why every choice above was made by nested CV.
 Private leaderboard: *to be added when the competition closes (15 Nov 2026).*
 
@@ -104,9 +106,27 @@ Private leaderboard: *to be added when the competition closes (15 Nov 2026).*
   every fold, with the same instances kept. The count-matched swap adds +0.0067
   (+0.0029 to +0.0104), and painting its choice with extent-robust masks
   (25 more nested refiners) brings the total to +0.0088 (+0.0048 to +0.0127)
-  over the vote rule, positive in every fold. The final refiners train for 24
-  epochs instead of the nested runs' 12, worth a further +0.0020 (+0.0008 to
-  +0.0032) per refiner on identical nested seed boxes, all five folds.
+  over the vote rule, positive in every fold. The nested pipeline rows above used
+  12-epoch refiners. The submitted refiners train longer, and that step is
+  measured one refiner at a time on identical nested seed boxes (the
+  single-refiner gate of `analysis`, not a rerun of the whole nested pipeline):
+  24 instead of 12 epochs gained +0.0020 PQ (+0.0008 to +0.0032), positive in all
+  five folds, and 48 instead of 24 epochs gained another +0.0020 (+0.0007 to
+  +0.0031; per fold +0.0021, +0.0028, +0.0014, +0.0019, +0.0016). Earlier in the
+  project the single-refiner gate overstated the ensemble effect of the extent-robust
+  recipe (+0.0047 for one refiner against +0.0026 in the nested ensemble), so the
+  gain of the five-refiner average is probably smaller than +0.0020; on the public
+  board it is invisible at two decimals.
+* **Things we tried after the pipeline was fixed, and dropped.** A ResNeXt-50
+  encoder for the refiner gained +0.0009 PQ (95 % interval -0.0002 to +0.0021)
+  over the 24-epoch ResNet-34, positive in four of five folds and zero in the
+  fifth, below our adoption rule. Averaging the 24-epoch and 48-epoch refiners
+  (ten maps instead of five) scored 0.0008 below the 48-epoch refiners alone on
+  the three folds we ran. A different family (Mask2Former proposals refined by
+  SAM 2) scored 0.38 on the public board, and four label-free consensus
+  submissions that combined it with this pipeline scored 0.39-0.40, below the
+  0.41 of the pipeline alone, although a small reused validation set had predicted
+  gains. None of these is in the released code.
 * Matched filaments agree with each annotator better than annotators agree with
   each other: mean IoU 0.693 vs 0.634, Dice 0.816 vs 0.773. 1.2 % of filaments are
   split across two or more of our instances (human vs human: 2.4 %); 2.6 % of our
@@ -151,7 +171,7 @@ python -m filament.detector --fold 0 --imgsz 1536 --out weights/det_s1536_f0.pt
 python -m filament.detector --fold 0 --model yolo11m.pt --batch 6 --out weights/det_m1280_f0.pt
 for f in 0 1 2 3 4; do
   python -m filament.refiner --fold $f --out weights/refiner_f$f.pt
-  python -m filament.refiner --fold $f --extent-robust --epochs 24 --out weights/refiner_extent_f$f.pt
+  python -m filament.refiner --fold $f --extent-robust --epochs 48 --out weights/refiner_extent_f$f.pt
 done
 ```
 
@@ -164,29 +184,40 @@ Extent-robust refiners: the same trainer with `--extent-robust` (seeds redrawn
 every epoch: 50 % jittered true boxes, 25 % short seeds covering 0.4-0.85 of
 the spine, 25 % long seeds 1.2-2.0x along the spine's end tangents; a window
 centred on the seed with side c x its long side, c ~ logU[1.5, 3]; target =
-the whole filament) and 24 epochs: with fresh seeds every epoch, longer
-training helps (+0.0020 PQ over 12 epochs, single refiner, all five folds).
+the whole filament) and 48 epochs: with fresh seeds every epoch, longer
+training keeps helping (+0.0020 PQ for 12 -> 24 and another +0.0020 for 24 -> 48
+epochs, single refiner, all five folds each time).
 
 Runtime on a Kaggle P100: about 35 min per YOLO11s @1280 detector and 45 min
-per refiner (measured; about 90 min for a 24-epoch extent-robust refiner); the
-@1536 and YOLO11m variants take longer (roughly 1-1.5 h each, estimated).
-Roughly 17 P100 GPU hours in total.
+per refiner (measured; about 90 min for a 24-epoch extent-robust refiner, and
+between 1.5 and 3 h for the 48-epoch ones on Kaggle's GPUs); the @1536 and YOLO11m
+variants take longer (roughly 1-1.5 h each, estimated). Roughly 25 P100 GPU hours
+in total, of which the five 48-epoch refiners are about 15.
 
 ### 4. Inference
 
 ```bash
-# candidate pools: every cluster with >= 2 voters, its votes and its masks
+# candidate pool: every cluster with >= 2 voters, its votes and its masks (production refiners)
 python -m filament.ensemble --weights weights --pool test_pool.csv.gz
-python -m filament.ensemble --weights weights --refiner-set extent --pool test_pool_extent.csv.gz
+# the same clusters, masks redrawn by the 48-epoch extent-robust refiners
+python -m filament.repaint --weights weights --pool test_pool.csv.gz --out test_pool_extent.csv.gz
 # selection on the first pool, masks from the second (CPU, a few minutes)
 python -m filament.selection --pool test_pool.csv.gz --masks-pool test_pool_extent.csv.gz --out submission.csv
 python -m filament.submission submission.csv --test
 ```
 
-Each pool took 54-55 minutes for the 180 test images on a Kaggle T4
+The first pool took 54-55 minutes for the 180 test images on a Kaggle T4
 (measured end to end, including package setup; 21 detector passes per image
-and 75 refiner passes per candidate: 5 refiners x 3 views x 5 shifted seeds). CPU
-works but takes many hours. All settings are CLI flags whose defaults are the
+and 75 refiner passes per candidate: 5 refiners x 3 views x 5 shifted seeds);
+the repaint repeats only the refiner passes (under half an hour on an RTX 5080).
+CPU works but takes many hours.
+
+The detectors run once on purpose. Their outputs move slightly with the library
+version and GPU (in one comparison, two of 1,985 clusters changed their order),
+and the selection step needs both pools to hold exactly the same clusters.
+Repainting copies boxes, votes and cluster ids from the first pool and
+recomputes only the refiner columns, so the two cannot disagree; `filament.selection`
+still refuses a mismatched pair. All settings are CLI flags whose defaults are the
 submitted configuration (`python -m filament.ensemble -h`). The vote rule
 alone (the earlier LB-0.40 submission) is
 `python -m filament.ensemble --weights weights --out submission.csv`.
@@ -207,9 +238,12 @@ python -m pytest -q            # or: python tests/test_metric.py, etc.
 `tests/test_equivalence.py` replays this package against the original research
 code and asserts identical training inputs (refiner samples, loss, YOLO labels,
 extent-robust samples) and identical inference outputs on real checkpoints,
-including the candidate pool; `tests/test_selection.py` rebuilds both submitted
-swap files row for row from the research test pools. Both are skipped when that
-code is not present.
+including the candidate pool; `tests/test_selection.py` rebuilds the submitted
+swap files (production, 12-, 24- and 48-epoch extent-robust masks) row for row
+from the research test pools. Both are skipped when that code is not present.
+The remaining tests run anywhere on CPU in about a minute and use synthetic
+boxes, masks and models; `tests/test_submission.py` also checks that
+`results/submission_x48.csv` is intact (SHA-256 below) and valid.
 
 ### Notebook
 
@@ -220,11 +254,12 @@ predictions.
 
 ## Model weights
 
-`WEIGHTS_URL` in `filament/ensemble.py` (placeholder:
-`https://example.com/REPLACE-ME/solar-filament-seg-weights.zip`) points to an
-archive of the 17 files below; unpack it into `weights/` and check them with
-`cd weights && sha256sum -c ../data/weights.sha256` (the files that made the
-submissions).
+The 17 files below are published as one archive, a GitHub release asset of this
+repository (`WEIGHTS_URL` in `filament/weights.py`; the link becomes live when the
+v1.0 release is published). Every CLI and the notebook download it
+automatically when a file is missing, and `python -m filament.weights --dest weights`
+does so on its own. Every file is checked against `data/weights.sha256`; to check
+them by hand, `cd weights && sha256sum -c ../data/weights.sha256`.
 
 | File | Model | Trained on | Inference size |
 |---|---|---|---|
@@ -232,7 +267,7 @@ submissions).
 | `det_s1536_f0.pt` | YOLO11s detector | all folds except 0 | 1536 |
 | `det_m1280_f0.pt` | YOLO11m detector | all folds except 0 | 1280 |
 | `refiner_f0.pt` ... `refiner_f4.pt` | U-Net / ResNet-34 refiner (state dict) | all folds except k | 512 crop, window 1.5 x seed |
-| `refiner_extent_f0.pt` ... `refiner_extent_f4.pt` | the same U-Net, `--extent-robust`, 24 epochs | all folds except k | 512 crop, window 2.25 x seed |
+| `refiner_extent_f0.pt` ... `refiner_extent_f4.pt` | the same U-Net, `--extent-robust`, 48 epochs (the submitted masks) | all folds except k | 512 crop, window 2.25 x seed |
 
 The selection model is refitted at run time (a few seconds) from
 `data/uhat_train.csv.gz`: one row per candidate cluster of the nested
@@ -282,11 +317,14 @@ filament/
   refiner.py     box-seed crop dataset, U-Net, loss and refiner training CLI
   inference.py   detector boxes, refiner probability maps, paste-back
   ensemble.py    voting, majority masks, painting, gates, candidate pools and the prediction CLI
+  repaint.py     the same pool with another refiner set's masks (clusters unchanged)
+  weights.py     download and SHA-256 verification of the 17 weight files
   selection.py   count-matched swap: 88 candidate features, u-hat model, selection CLI
   submission.py  RLE helpers and the submission validator CLI
 tests/           assert-based tests (pytest or plain python)
 notebooks/       pipeline.ipynb
-data/            cv_folds.json, uhat_train.csv.gz (+ the competition data, not committed)
+data/            cv_folds.json, uhat_train.csv.gz, weights.sha256 (+ the competition data, not committed)
+results/         submission_x48.csv: the submitted file (SHA-256 f3ae2ebd...9bea54)
 ```
 
 ## License

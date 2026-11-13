@@ -17,3 +17,6 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .ipynb_checkpoints/
+
+# the reference output of the submitted pipeline is kept
+!results/submission_x48.csv

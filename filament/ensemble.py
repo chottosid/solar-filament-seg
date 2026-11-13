@@ -22,8 +22,10 @@ Per test image:
 
     python -m filament.ensemble --weights weights --out submission.csv
     python -m filament.ensemble --weights weights --fold 0 --out oof_f0.csv   # leak-free fold check
-    python -m filament.ensemble --weights weights --refiner-set extent --pool test_pool_extent.csv.gz
+    python -m filament.ensemble --weights weights --pool test_pool.csv.gz
         # every candidate (>= 2 voters) with its masks and votes, for filament.selection
+    python -m filament.repaint --weights weights --pool test_pool.csv.gz --out test_pool_extent.csv.gz
+        # the same clusters with the extent-robust refiners' masks (the submitted masks)
 """
 
 from __future__ import annotations
@@ -40,15 +42,15 @@ import torch
 from .data import TEST_IMAGES, TRAIN_IMAGES, data_root, fold_stems, load_image_gray
 from .inference import detect_boxes, load_refiner, paste_full, refine_prob
 from .submission import layers_to_rles, validate, write_submission
+from .weights import WEIGHTS_URL, ensure  # noqa: F401  (WEIGHTS_URL stays importable from here)
 
-# Weights: 5 fold detectors (YOLO11s @1280), YOLO11s @1536 and YOLO11m @1280
-# (both on the fold-0 split), then the 5 fold refiners. Order matters: the
+# Weights (17 files, see filament/weights.py): 5 fold detectors (YOLO11s @1280), YOLO11s @1536 and YOLO11m @1280
+# (both on the fold-0 split), then the 5 fold refiners and the 5 extent-robust (48-epoch) refiners. Order matters: the
 # detector order matches EnsembleConfig.sizes.
 DET_FILES = ("det_f0.pt", "det_f1.pt", "det_f2.pt", "det_f3.pt", "det_f4.pt", "det_s1536_f0.pt", "det_m1280_f0.pt")
 REFINER_FILES = ("refiner_f0.pt", "refiner_f1.pt", "refiner_f2.pt", "refiner_f3.pt", "refiner_f4.pt")
-EXTENT_REFINER_FILES = tuple(f"refiner_extent_f{k}.pt" for k in range(5))  # --extent-robust, context 2.25
+EXTENT_REFINER_FILES = tuple(f"refiner_extent_f{k}.pt" for k in range(5))  # --extent-robust, 48 epochs, context 2.25
 POOL_MIN_SUPPORT, POOL_VOTE_CONF = 2, 0.20  # a pool keeps clusters with >= 2 voters at conf >= 0.20
-WEIGHTS_URL = "https://example.com/REPLACE-ME/solar-filament-seg-weights.zip"  # placeholder: 12 files above
 
 
 def _setting(default, doc: str):
@@ -314,7 +316,8 @@ def predict(dets: list, refiners: list[torch.nn.Module], image_dir: Path, stems:
 def main() -> None:
     ap = argparse.ArgumentParser(description="Predict a submission CSV with the 7-detector / 5-refiner ensemble.",
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    ap.add_argument("--weights", type=Path, required=True, help=f"dir with {', '.join(DET_FILES + REFINER_FILES)}")
+    ap.add_argument("--weights", type=Path, required=True,
+                    help="directory for the 17 released weight files (downloaded and verified if missing; see filament.weights)")
     ap.add_argument("--out", type=Path, default=Path("submission.csv"), help="output CSV")
     ap.add_argument("--fold", type=int, default=None,
                     help="instead of the test set, predict fold K's validation images with fold K's own "
@@ -344,9 +347,7 @@ def main() -> None:
         cfg = replace(cfg, sizes=(1280,), min_votes=1)
         image_dir = data_root() / TRAIN_IMAGES
         stems = sorted(fold_stems(args.fold))
-    missing = [name for name in det_files + ref_files if not (args.weights / name).exists()]
-    if missing:
-        ap.error(f"missing weights in {args.weights}: {missing} (download: {WEIGHTS_URL})")
+    ensure(args.weights, det_files + ref_files)  # downloads and verifies the released set if anything is missing
     if not stems:
         ap.error(f"no input images found in {image_dir}")
     if len(cfg.sizes) != len(det_files):

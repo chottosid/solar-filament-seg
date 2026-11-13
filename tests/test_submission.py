@@ -54,6 +54,16 @@ def test_validator():
         _expect_error(good, "stems not in test set", test_dir=Path(tmp))
 
 
+def test_reference_submission_is_the_submitted_file():
+    """results/submission_x48.csv is the file scored 0.41 (Kaggle submission 58306582): intact and valid."""
+    import hashlib
+
+    path = Path(__file__).resolve().parents[1] / "results/submission_x48.csv"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == \
+        "f3ae2ebdab79523e40b8e3c23023a77929a9eff7f60acd88a45b36979e9bea54"
+    assert validate(path).startswith("OK: 1049 rows / 177 images")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
