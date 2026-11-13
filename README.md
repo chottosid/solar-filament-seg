@@ -252,6 +252,13 @@ annotator overlays, the fold split, training (guarded by `RUN_TRAINING`),
 weights, test inference, validation, a fold-0 PQ evaluation and overlays of
 predictions.
 
+`notebooks/pipeline_executed.ipynb` is the same notebook with its outputs, run
+top to bottom on a fresh Kaggle T4 machine from a clean clone of this repository
+(weights downloaded by the notebook, 112 minutes). Its test-set submission
+matches `results/submission_x48.csv` (see Notes). Its fold-0 evaluation (fold 0's
+own detector and refiner, current inference settings) gives PQ 0.445; the
+single-model row of the table above was measured with earlier inference settings.
+
 ## Model weights
 
 The 17 files below are published as one archive, a GitHub release asset of this
