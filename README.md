@@ -291,6 +291,11 @@ u and the image's record count.
   library version can flip rare boundary pixels. Training is not bit-exact on
   GPU (and the refiner trainer is unseeded, as in the original runs); the
   released weights reproduce the submission.
+* Measured on a fresh machine (Kaggle T4, Python 3.13, a clean clone of this
+  repository, weights downloaded by the notebook): the notebook's test-set run
+  wrote 1049 instances on 177 images, the same counts as
+  `results/submission_x48.csv`; 1024 masks were byte-identical and 1048 of the
+  1049 reference masks were matched at IoU > 0.95 (mean IoU 0.99999).
 
 ## Honesty statement
 
