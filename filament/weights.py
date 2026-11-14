@@ -1,16 +1,7 @@
-"""Fetch and verify the 17 trained weight files (7 detectors, 5 refiners, 5 extent-robust refiners).
+"""Download and verify the 17 trained weight files.
 
-The committee should not need any file beyond this repository and the competition data, so the
-weights are published as one zip next to the code. Every file is checked against the SHA-256
-manifest committed in data/weights.sha256, which is also what makes a half-finished or corrupted
-download fail loudly instead of silently producing a different submission.
-
-    python -m filament.weights --dest weights               # download (if needed) and verify
-    python -m filament.weights --dest weights --verify-only   # hash what is already there
-
-WEIGHTS_URL is the GitHub release asset of this repository. Until the release is published the
-link returns 404; the error message says so, and --url accepts any other location (including a
-local file:// path to the zip).
+    python -m filament.weights --dest weights                 # download if needed, then verify
+    python -m filament.weights --dest weights --verify-only
 """
 
 from __future__ import annotations

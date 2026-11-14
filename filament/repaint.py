@@ -1,18 +1,9 @@
-"""Redraw a candidate pool's masks with another refiner set, keeping every cluster fixed.
+"""Redraw a candidate pool's masks with another refiner set, keeping the clusters.
 
-The submitted pipeline selects candidates with masks from the production refiners and then paints
-the chosen candidates with the extent-robust refiners' masks. Both steps must see exactly the same
-clusters. Running the detectors a second time does not guarantee that: detector outputs move
-slightly with the library and GPU they run on (in our test, two of 1,985 clusters changed their
-order between two environments), and then cluster ids no longer line up. Repainting avoids the
-problem by construction: the detectors run once, and this module recomputes only what the
-refiners produce (mask area, ring contrast, run-length encoding and refiner agreement) for the
-stored seed boxes. Votes, boxes and cluster ids are copied unchanged.
+Detector outputs can change slightly between machines, so the detectors are
+run once and only the masks are recomputed.
 
-    python -m filament.ensemble --weights weights --pool test_pool.csv.gz
-    python -m filament.repaint  --weights weights --pool test_pool.csv.gz --refiner-set extent \
-                                --out test_pool_extent.csv.gz
-    python -m filament.selection --pool test_pool.csv.gz --masks-pool test_pool_extent.csv.gz
+    python -m filament.repaint --weights weights --pool test_pool.csv.gz --out test_pool_extent.csv.gz
 """
 
 from __future__ import annotations

@@ -1,12 +1,7 @@
-"""Count-matched swap selection vs the submitted files (needs the research repository's test pools).
+"""Rebuild the submitted CSVs from the research test pools.
 
-The research test pools (production detectors; production or extent-robust refiners) plus
-data/uhat_train.csv.gz must reproduce the submitted CSVs row for row: swap selection with
-production masks (LB 0.40), with 12-epoch extent-robust masks (LB 0.40), with 24-epoch
-extent-robust masks (LB 0.41) and with the final 48-epoch extent-robust masks (LB 0.41,
-results/submission_x48.csv; its pool is the standard pool repainted with the 48-epoch refiners,
-as filament.repaint does). Skipped without the research repository (default ../SOLAR_FILAMENT
-or $FS26_SOURCE). ~40 min on CPU.
+Needs the research repository (../SOLAR_FILAMENT or $FS26_SOURCE); skipped
+otherwise. About 40 minutes on CPU.
 """
 
 import os

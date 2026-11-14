@@ -1,29 +1,11 @@
-"""Count-matched swap: which candidates to keep, at the vote rule's instance count.
+"""Rank the candidates and keep as many as the vote rule would.
 
-The 5-of-7 vote fixes how many filaments we predict; the leaderboard punished
-every variant that predicted more (or fewer). This stage keeps that count but
-changes *which* candidates are kept. A gradient-boosting regressor predicts
-each candidate cluster's u, the annotator-averaged matched IoU (IoU > 0.5,
-else 0), i.e. its expected contribution to the PQ numerator, from 88
-inference-time features:
+A gradient-boosting model predicts each candidate's matched IoU (averaged over
+annotator records) from 88 features: detector votes, mask shape and contrast,
+pixel statistics and overlaps with other candidates. It is fitted on
+data/uhat_train.csv.gz (nested cross-validation pools of the training images).
+The top N candidates are kept, N being the vote rule's instance count.
 
-  votes    the 7 detectors' confidences, vote counts at 0.2..0.6, and the
-           same detectors' votes on the vertically / horizontally flipped image
-  mask     area, ring contrast, refiner agreement, IoU with the binary-majority
-           masks, shape (elongation, fill, components, distance transform)
-  pixels   darkness profile inside / around the mask, edge gradient, ridge
-           (Hessian) response at two scales, global image statistics
-  context  overlaps with other candidates, local density, rank of the seed
-           confidence in the image, position on the solar disk
-
-The model is fitted on the nested cross-validation pools (data/uhat_train.csv.gz:
-every cluster of all 707 training images, scored by ensembles that never saw
-the image). At test time all candidates (>= 2 voters) are ranked by predicted
-u, the top N are painted in that order, and N is set so the output has exactly
-as many instances as the 5-of-7 rule on the same images. Nested CV: +0.0067
-PQ [+0.0029, +0.0104] over the vote rule, positive in all five folds.
-
-    python -m filament.selection --pool test_pool.csv.gz --out submission.csv
     python -m filament.selection --pool test_pool.csv.gz --masks-pool test_pool_extent.csv.gz --out submission.csv
 """
 

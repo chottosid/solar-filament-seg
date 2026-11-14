@@ -1,7 +1,4 @@
-"""Single-model primitives: detector boxes, refiner probability maps, paste-back.
-
-The ensemble (ensemble.py) is built only from these four calls, so each one
-behaves exactly as it did when the submitted predictions were produced.
+"""Single-model helpers: detector boxes, refiner probability maps, paste-back.
 """
 
 from __future__ import annotations

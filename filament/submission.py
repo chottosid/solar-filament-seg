@@ -1,9 +1,7 @@
-"""Submission format and the pre-submit validator.
+"""Submission format and validator.
 
-One CSV row per predicted filament: filament_id = "<image stem>_<k>",
-segmentation_rle = COCO RLE counts string of a 2048 x 2048 mask. The host
-rejects a file whose instances overlap within an image, so every submission
-written by this package is validated before it is reported as done.
+One row per filament: filament_id = "<image stem>_<k>", segmentation_rle =
+COCO RLE of a 2048 x 2048 mask. Masks of one image must not overlap.
 
     python -m filament.submission submission.csv [--test]
 """

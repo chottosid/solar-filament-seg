@@ -1,20 +1,9 @@
-"""Panoptic Quality exactly as the organisers compute it.
+"""Panoptic Quality as computed by the competition.
 
-Ported from the organisers' self-evaluation notebook. Their PQ differs from
-the textbook definition, and every quirk changes which predictions pay off:
-
-* Pooled: TP IoUs, FP and FN are summed over the whole set, then
-  PQ = sum(TP IoU) / (TP + FP/2 + FN/2). It is not a mean of per-image PQs.
-* Per annotator record: ground truth is keyed by record ("010401-<stem>"),
-  predictions by image ("<stem>"). An image with three records scores the same
-  predictions three times, so a filament only one annotator drew costs a FN
-  against the other two records, and a spurious prediction costs one FP per record.
-* No one-to-one matching: every (GT, prediction) pair with IoU > 0.5 is a TP.
-  FP = predictions that hit no GT, FN = GT hit by no prediction.
-* Predictions on an image without any record count entirely as FP.
-
-`pq_one_image` is the organisers' dense implementation and the reference;
-`pq_one_image_rles` reproduces it on RLEs without building 2048^2 mask stacks.
+Ported from the organisers' evaluation notebook. PQ is pooled over all images,
+each image is scored against every annotator record, and every pair with
+IoU > 0.5 counts as a match. pq_one_image is the reference implementation;
+pq_one_image_rles gives the same result on RLEs and is much faster.
 
     python -m filament.metric --pred oof_f0.csv --fold 0
 """

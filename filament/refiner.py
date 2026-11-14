@@ -1,29 +1,13 @@
-"""Stage 2: the box-seeded crop refiner (U-Net, ResNet-34 encoder).
+"""U-Net refiner (ResNet-34 encoder) that segments a filament inside a crop around its box.
 
-A detector box says *where* a filament is; the refiner says *which pixels*.
-For every box, a square window (1.5x the box, at least 96 px) is cut from the
-full-resolution image and resized to 512 x 512 (median window ~140 px, so a
-4 px ribbon is ~15 px wide at the network input). The input has three channels:
+The crop is 1.5x the box (at least 96 px), resized to 512 x 512. Input channels:
+image, CLAHE(image), filled box. Training boxes are jittered ground-truth boxes.
 
-  [raw image, CLAHE(image), seed]
-
-CLAHE lifts faint filaments out of limb darkening. The seed is a filled box
-padded by 40 % per side: the same representation at training time (a
-jittered ground-truth box) and at test time (a detector box). The seed is
-never the ground-truth mask, which would leak the answer.
-
-Training uses one sample per (annotator record, filament), so annotator
-disagreement acts as label noise the model averages over.
-
-Extent-robust variant (--extent-robust, ExtentRobustDataset): the refiner
-above copies its seed box (mask length follows seed length 1:1 and never
-leaves the padded seed), so a detector box that covers half a filament gives
-half a mask. This variant trains on short and long seeds drawn along the
-filament's spine, a window centred on the seed with a random context, and the
-whole filament as target; inference then uses a 2.25x window (INFER_CONTEXT).
+--extent-robust trains on boxes that are too short or too long, in a crop
+centred on the box, so the network does not copy the box's length.
 
     python -m filament.refiner --fold 0 --out weights/refiner_f0.pt
-    python -m filament.refiner --fold 0 --extent-robust --out weights/refiner_extent_f0.pt
+    python -m filament.refiner --fold 0 --extent-robust --epochs 48 --out weights/refiner_extent_f0.pt
 """
 
 from __future__ import annotations

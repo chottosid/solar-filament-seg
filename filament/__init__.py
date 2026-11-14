@@ -1,14 +1,14 @@
 """Solar filament instance segmentation on GONG H-alpha full-disk images.
 
-Two-stage pipeline: YOLO11 boxes -> box-seeded U-Net masks, combined by a
-7-detector / 5-refiner vote and painted into non-overlapping instances.
-
-Modules (import order = data flow):
-    data        COCO annotations, annotator records, images, day-grouped folds
-    metric      the organisers' Panoptic Quality, replicated exactly
-    detector    YOLO dataset export and detector training
-    refiner     box-seed crop dataset, U-Net and refiner training
-    inference   single-model primitives (boxes, probability maps, paste-back)
-    ensemble    voting, mask majority, painting and the submission CLI
-    submission  RLE helpers and the submission validator
+Modules:
+    data        annotations, images, cross-validation folds
+    metric      the competition's PQ metric
+    detector    YOLO11 detector training
+    refiner     U-Net refiner training
+    inference   detector boxes and refiner probability maps
+    ensemble    voting, candidate pools, painting, prediction CLI
+    repaint     redraw a pool's masks with another refiner set
+    selection   candidate ranking and selection
+    submission  RLE helpers and submission validator
+    weights     download and checksum the trained weights
 """

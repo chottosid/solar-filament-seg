@@ -1,17 +1,10 @@
-"""MAGFiLO annotations, images and the day-grouped cross-validation split.
+"""MAGFiLO annotations, images and the day-grouped cross-validation folds.
 
-Ground truth is a COCO-style JSON:
-  images[]       id = "<record>-<stem>" (e.g. "010401-20140609195854Bh"),
-                 file_name = "<stem>.jpeg"
-  annotations[]  image_id -> that id; one polygon per filament plus bbox/area.
-
-A *record* is one annotator's complete labelling of one physical image. 296 of
-the 707 training images carry two or three independent records, and the metric
-scores predictions against every record separately, so the record (not the
-image) is the unit of ground truth throughout this package.
+A record is one annotator's labelling of one image. Some images have two or
+three records, and the metric scores predictions against each of them.
 
     python -m filament.data           # regenerate data/cv_folds.json
-    python -m filament.data --check   # verify the committed file
+    python -m filament.data --check   # check the committed file
 """
 
 from __future__ import annotations

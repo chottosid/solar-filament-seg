@@ -1,13 +1,7 @@
-"""This package vs the original research code on real checkpoints: identical outputs.
+"""Compare this package with the original research code on real checkpoints.
 
-Needs the research repository (default ../SOLAR_FILAMENT, or $FS26_SOURCE)
-with its fold-0 detector/refiner checkpoints and the training data; skipped
-otherwise. Training inputs (refiner samples, loss, YOLO labels) are compared
-directly. Inference runs on CPU: the fold-0 detector stands in for all 7 voters (at the
-production image sizes) and the fold-0 refiner for all 5 refiners, on two
-fold-0 images with overlapping detections. On the second, painting clips two
-of six voted masks to 124 px and 1 px, which the post-paint area rule then
-drops, so painting order and every gate are exercised. ~10 minutes on CPU.
+Needs the research repository (../SOLAR_FILAMENT or $FS26_SOURCE); skipped
+otherwise. About 10 minutes on CPU.
 """
 
 import functools

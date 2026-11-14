@@ -1,10 +1,4 @@
-"""Stage 1: YOLO11 filament detector (single class "filament").
-
-Boxes, not masks, are learned here: a box is a much easier target for a
-filament whose exact outline annotators disagree on, and the refiner draws the
-mask afterwards. Training labels are the union of the boxes of every annotator
-record of an image, so a filament any annotator saw is a positive and
-annotator disagreement acts as box augmentation.
+"""YOLO11 filament detector (one class). Labels are the union of all annotators' boxes.
 
     python -m filament.detector --fold 0 --out weights/det_f0.pt
     python -m filament.detector --fold 0 --imgsz 1536 --out weights/det_s1536_f0.pt

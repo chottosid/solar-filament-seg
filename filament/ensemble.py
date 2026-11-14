@@ -1,31 +1,18 @@
-"""The submitted pipeline: 7 detectors vote, 5 refiners draw, greedy painting.
+"""Detector voting, refiner masks and painting.
 
-Per test image:
-  1. Each of 7 YOLO voters proposes boxes (conf >= 0.20) at its own image size.
-  2. Boxes of different voters with box IoU > 0.30 are linked (union-find).
-     A cluster survives if >= 5 voters have their own conf >= 0.40 in it.
-     Agreement buys precision: the metric charges a spurious instance once
-     per annotator record of the image, and looser votes that gained recall
-     in cross-validation lost on the leaderboard.
-  3. The highest-confidence box of a cluster seeds every refiner. Each of the
-     5 fold refiners sees 3 views (identity, vertical flip, horizontal flip).
-     Final ("pmean") mask: the 15 probability maps, bilinearly resized to the
-     frame, are averaged and thresholded at 0.5. Nested cross-validation (the
-     whole ensemble retrained without each outer fold) puts this +0.004 PQ
-     above the binary majority ("nearest"/"bilinear": a pixel kept by a
-     refiner if >= 2 of 3 views agree, by the ensemble if >= 3 of 5 refiners
-     do) in every fold, with the same instances kept.
-  4. Masks < 200 px are dropped, the rest painted greedily by seed confidence
-     without overlap (the host rejects overlapping instances); painted
-     fragments < 200 px and masks with ring contrast < 0.05 (not darker than
-     their surroundings) are dropped.
+For each image:
+  1. Seven YOLO detectors propose boxes (conf >= 0.20).
+  2. Boxes of different detectors with IoU > 0.30 are grouped (union-find).
+     The vote rule keeps a group if >= 5 detectors have conf >= 0.40 in it.
+  3. The most confident box of a group is the refiner input. Five refiners x
+     3 views (identity, two flips) give 15 probability maps, averaged and
+     thresholded at 0.5.
+  4. Masks are painted without overlap; masks and fragments < 200 px and
+     masks with ring contrast < 0.05 are dropped.
 
-    python -m filament.ensemble --weights weights --out submission.csv
-    python -m filament.ensemble --weights weights --fold 0 --out oof_f0.csv   # leak-free fold check
-    python -m filament.ensemble --weights weights --pool test_pool.csv.gz
-        # every candidate (>= 2 voters) with its masks and votes, for filament.selection
-    python -m filament.repaint --weights weights --pool test_pool.csv.gz --out test_pool_extent.csv.gz
-        # the same clusters with the extent-robust refiners' masks (the submitted masks)
+    python -m filament.ensemble --weights weights --out submission.csv       # vote rule
+    python -m filament.ensemble --weights weights --fold 0 --out oof_f0.csv  # fold check
+    python -m filament.ensemble --weights weights --pool test_pool.csv.gz    # all candidates
 """
 
 from __future__ import annotations
